@@ -1,0 +1,18 @@
+# Stock boot image (large, local only; never upload)
+原厂镜像/
+*.img
+*.img.gz
+
+# Build workspaces (created by the workflow / local builds)
+kernel_workspace/
+out/
+out_krn/
+.repo/
+AnyKernel3/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local calibration/output artifacts
+calib_out/

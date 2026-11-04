@@ -1,0 +1,7 @@
+# Build runs on Linux; keep scripts/workflow LF even when edited on Windows.
+* text=auto eol=lf
+
+*.gz binary
+*.img binary
+*.png binary
+*.jpg binary

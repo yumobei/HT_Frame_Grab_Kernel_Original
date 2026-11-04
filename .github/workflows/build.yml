@@ -1,0 +1,598 @@
+name: Build HTFG Clean Kernel
+
+# Clean-room build: OnePlusOSS kernel sources + HTFG only.
+# No Action-Build clone, no KSU/SUSFS/KPM/BakaSU, no root userspace.
+# The source manifest is vendored under manifest/ because OnePlusOSS's public
+# kernel_manifest does not publish the oneplus_ace_race_v device file.
+
+on:
+  workflow_dispatch:
+    inputs:
+      FILE:
+        description: "Device manifest file"
+        type: choice
+        required: true
+        default: oneplus_ace_race_v
+        options:
+          - oneplus_ace_race_v
+      SUFFIX:
+        description: "Kernel release suffix (stock: 9-o-g38e2c85bc7af)"
+        type: string
+        required: true
+        default: "9-o-g38e2c85bc7af"
+      BUILD_TIME:
+        description: "KBUILD_BUILD_TIMESTAMP (stock: Mon Jan 12 09:35:58 UTC 2026)"
+        type: string
+        required: true
+        default: "Mon Jan 12 09:35:58 UTC 2026"
+      BUILD_MODE:
+        description: "Build path: stock (OPLUS script, default) or fast (direct make)"
+        type: choice
+        required: true
+        default: stock
+        options:
+          - stock
+          - fast
+      DEBUG_TOOL_UID:
+        description: "Allow uid 0/2000 (debug only; production must be false)"
+        type: boolean
+        required: true
+        default: false
+      BUILD_NOCACHE:
+        description: "Disable ccache restore/save for this run"
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CCACHE_COMPILERCHECK: "none"
+  CCACHE_NOHASHDIR: "true"
+  CCACHE_NOHARDLINK: "true"
+  CCACHE_IS_KERNEL_COMPILING: "true"
+  CCACHE_MAXSIZE: 5G
+
+jobs:
+  build:
+    name: HTFG ${{ github.event.inputs.BUILD_MODE }} ${{ github.event.inputs.FILE }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Stage everything that must survive Maximize Build Space.  That step
+      # mounts a fresh volume over $GITHUB_WORKSPACE, hiding the checkout.
+      - name: Stage Build Inputs
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/htfg" \
+                   "$RUNNER_TEMP/htfg-build/baseline" \
+                   "$RUNNER_TEMP/htfg-build/manifest" \
+                   "$RUNNER_TEMP/htfg-build/scripts"
+          cp -a "$GITHUB_WORKSPACE/htfg/." "$RUNNER_TEMP/htfg/"
+          cp -a "$GITHUB_WORKSPACE/baseline/." "$RUNNER_TEMP/htfg-build/baseline/"
+          cp -a "$GITHUB_WORKSPACE/manifest/." "$RUNNER_TEMP/htfg-build/manifest/"
+          cp -a "$GITHUB_WORKSPACE/scripts/." "$RUNNER_TEMP/htfg-build/scripts/"
+          ls -l "$RUNNER_TEMP/htfg" "$RUNNER_TEMP/htfg-build/manifest"
+
+      - name: Maximize Build Space
+        env:
+          ROOT_RESERVE_MB: '8192'
+          TEMP_RESERVE_MB: '2048'
+          SWAP_SIZE_MB: '0'
+          REMOVE_DOTNET: 'true'
+          REMOVE_ANDROID: 'true'
+          REMOVE_HASKELL: 'true'
+          REMOVE_CODEQL: 'true'
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/htfg-build/scripts/maximize-build-space.sh" /tmp/maximize-build-space.sh
+          bash /tmp/maximize-build-space.sh
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "HTFG Builder"
+          git config --global user.email "htfg@localhost"
+          mkdir -p "$GITHUB_WORKSPACE/kernel_workspace"
+
+      - name: Validate Inputs
+        run: |
+          set -euo pipefail
+          SUFFIX="${{ github.event.inputs.SUFFIX }}"
+          BUILD_TIME="${{ github.event.inputs.BUILD_TIME }}"
+          MODE="${{ github.event.inputs.BUILD_MODE }}"
+          if [ -z "$SUFFIX" ] || [ "$SUFFIX" = "-1" ]; then
+            echo "::error::SUFFIX must be a literal suffix, not empty or -1"
+            exit 1
+          fi
+          if [ -z "$BUILD_TIME" ] || [ "$BUILD_TIME" = "-1" ] || [ "$BUILD_TIME" = "F" ]; then
+            echo "::error::BUILD_TIME must be a literal timestamp, not empty, -1, or F"
+            exit 1
+          fi
+          if [ "$MODE" != "stock" ] && [ "$MODE" != "fast" ]; then
+            echo "::error::BUILD_MODE must be stock or fast"
+            exit 1
+          fi
+          if [ "$SUFFIX" != "9-o-g38e2c85bc7af" ]; then
+            echo "::warning::SUFFIX is not the stock value; HTFG Verify will fail unless the baseline is updated"
+          fi
+          if [ "$BUILD_TIME" != "Mon Jan 12 09:35:58 UTC 2026" ]; then
+            echo "::warning::BUILD_TIME is not the stock value; HTFG Verify will fail unless the baseline is updated"
+          fi
+          echo "mode=$MODE suffix=$SUFFIX time=$BUILD_TIME"
+
+      - name: Load Manifest Info
+        run: |
+          set -euo pipefail
+          FILE="${{ github.event.inputs.FILE }}"
+          M="$RUNNER_TEMP/htfg-build/manifest/${FILE}.xml"
+          [ -s "$M" ] || { echo "::error::vendored manifest not found: $M"; exit 1; }
+          REVISION=$(grep -oP '<project[^>]+revision="\K[^"]+' "$M" | head -n 1 || true)
+          CPU=$(echo "$REVISION" | sed -E 's#^(oneplus|realme|oppo)/([^_]+).*#\2#')
+          ANDROID_VERSION=$(echo "$REVISION" | grep -oP '\d+\.\d+(\.\d+)?' | head -n 1 || true)
+          BUILD_LINE=$(grep -m1 'oplus_build_kernel.sh' "$RUNNER_TEMP/htfg-build/manifest/README.md" || true)
+          CPUD=$(echo "$BUILD_LINE" | awk '{print $(NF-1)}')
+          BUILD_METHOD=$(echo "$BUILD_LINE" | awk '{print $NF}')
+          [ -n "$CPU" ] && [ -n "$ANDROID_VERSION" ] && [ -n "$CPUD" ] && [ -n "$BUILD_METHOD" ] || {
+            echo "::error::cannot parse CPU/ANDROID_VERSION/CPUD/BUILD_METHOD from vendored manifest"
+            exit 1
+          }
+          {
+            echo "CPU=$CPU"
+            echo "ANDROID_VERSION=$ANDROID_VERSION"
+            echo "CPUD=$CPUD"
+            echo "BUILD_METHOD=$BUILD_METHOD"
+            echo "MANIFEST_FILE=$M"
+          } >> "$GITHUB_ENV"
+          echo "CPU=$CPU ANDROID_VERSION=$ANDROID_VERSION CPUD=$CPUD BUILD_METHOD=$BUILD_METHOD"
+
+      - name: Check Disk Space
+        run: df -h
+
+      - name: Create and Enable 3G Swap
+        run: |
+          set -euo pipefail
+          sudo swapoff -a
+          sudo fallocate -l 3G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Set Cache Environment
+        if: ${{ github.event.inputs.BUILD_NOCACHE == 'false' }}
+        run: |
+          echo "CCACHE_DIR=$HOME/.ccache_${{ github.event.inputs.FILE }}_${{ github.event.inputs.BUILD_MODE }}" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/.ccache_${{ github.event.inputs.FILE }}_${{ github.event.inputs.BUILD_MODE }}"
+
+      - name: Install Dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            python3 git curl libelf-dev build-essential flex bison libssl-dev \
+            libncurses-dev lz4 zlib1g-dev libxml2-utils rsync unzip gawk dos2unix \
+            kmod libdw-dev elfutils dwarves bc cpio ccache device-tree-compiler xz-utils
+          # The MTK stock script invokes "python" (not only python3).
+          sudo ln -sf /usr/bin/python3 /usr/local/bin/python
+
+      - name: Restore Ccache
+        if: ${{ github.event.inputs.BUILD_NOCACHE == 'false' }}
+        id: restore-ccache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.event.inputs.FILE }}-${{ github.event.inputs.BUILD_MODE }}-v2
+
+      - name: Initialize Ccache
+        if: ${{ github.event.inputs.BUILD_NOCACHE == 'false' }}
+        run: |
+          set -euo pipefail
+          ccache -M "$CCACHE_MAXSIZE"
+          ccache -s
+
+      - name: Install Repo Tool
+        run: |
+          set -euo pipefail
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/repo"
+          chmod a+x "$HOME/repo"
+          sudo mv "$HOME/repo" /usr/local/bin/repo
+
+      - name: Initialize Repo and Sync
+        env:
+          FILE: ${{ github.event.inputs.FILE }}
+        run: |
+          set -euo pipefail
+          MANIFEST_REPO="$RUNNER_TEMP/htfg-build/manifest-repo"
+          rm -rf "$MANIFEST_REPO"
+          mkdir -p "$MANIFEST_REPO"
+          cp "$RUNNER_TEMP/htfg-build/manifest/${FILE}.xml" "$MANIFEST_REPO/${FILE}.xml"
+          cd "$MANIFEST_REPO"
+          git init -q
+          git checkout -q -b master
+          git add "${FILE}.xml"
+          git -c user.name="HTFG Builder" -c user.email="htfg@localhost" commit -q -m "vendored manifest"
+          cd "$GITHUB_WORKSPACE/kernel_workspace"
+          repo init -u "file://$MANIFEST_REPO" -b master -m "${FILE}.xml" \
+            --depth=1 --no-clone-bundle --no-tags
+          repo sync -c -j"$(nproc)" --no-clone-bundle --no-tags --force-sync
+
+          KERNEL_REPOS_PATH=$(find . -type f -name "build.config.msm.common" | head -n 1 || true)
+          if [ -n "$KERNEL_REPOS_PATH" ]; then
+            KERNEL_REPOS=$(echo "${KERNEL_REPOS_PATH#./}" | cut -d/ -f2)
+            echo "KERNEL_REPOS=$KERNEL_REPOS" >> "$GITHUB_ENV"
+          fi
+
+          # Build-mechanics only: the stock OPLUS script may run a defconfig
+          # consistency check that rejects any added symbol.  This does not
+          # change the generated .config; HTFG Verify checks the real output.
+          if grep -q 'check_defconfig' kernel_platform/common/build.config.gki 2>/dev/null; then
+            sed -i 's/check_defconfig//' kernel_platform/common/build.config.gki
+          fi
+          if grep -q 'check_defconfig = None,' kernel_platform/build/kernel/kleaf/common_kernels.bzl 2>/dev/null; then
+            sed -i 's/check_defconfig = None,/check_defconfig = "disabled",/' kernel_platform/build/kernel/kleaf/common_kernels.bzl
+            sed -i 's/if check_defconfig == None:/if False:  # check_defconfig == None:/' kernel_platform/build/kernel/kleaf/common_kernels.bzl
+          fi
+
+      - name: Kernel Version Handling
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform"
+          KMI=""
+          for f in ./common/build.config.constants ./common/build.config.common; do
+            if [ -f "$f" ]; then
+              KMI=$(grep -m1 '^BRANCH=' "$f" | cut -d= -f2 || true)
+              [ -n "$KMI" ] && break
+            fi
+          done
+          if [ -z "$KMI" ] && [ -n "${KERNEL_REPOS:-}" ]; then
+            KMI=$(grep -m1 '^android' "./$KERNEL_REPOS/android/ACK_SHA" | cut -d- -f1,2 || true)
+          fi
+          [ -n "$KMI" ] || { echo "::error::KMI not found"; exit 1; }
+          {
+            echo "KMI=$KMI"
+            echo "KANDROID_VERSION=${KMI%-*}"
+            echo "KERNEL_VERSION=${KMI#*-}"
+          } >> "$GITHUB_ENV"
+          echo "KMI=$KMI"
+
+      - name: Rust Version Handling
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform"
+          RUSTC_VERSION=""
+          if [ -f ./common/build.config.constants ]; then
+            RUSTC_VERSION=$(grep '^RUSTC_VERSION=' ./common/build.config.constants | cut -d'=' -f2 || true)
+          fi
+          if [ -n "$RUSTC_VERSION" ]; then
+            RUSTC_DIR_VERSION=$(echo "$RUSTC_VERSION" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')
+            [ -n "$RUSTC_DIR_VERSION" ] || RUSTC_DIR_VERSION="$RUSTC_VERSION"
+            {
+              echo "RUSTC_VERSION=$RUSTC_VERSION"
+              echo "RUSTC_DIR_VERSION=$RUSTC_DIR_VERSION"
+              echo "ENABLE_RUST=true"
+            } >> "$GITHUB_ENV"
+          else
+            echo "ENABLE_RUST=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Custom Kernel Suffix
+        env:
+          SUFFIX: ${{ github.event.inputs.SUFFIX }}
+        run: |
+          set -euo pipefail
+          [ -n "${KANDROID_VERSION:-}" ] || { echo "::error::KANDROID_VERSION is empty"; exit 1; }
+          cd "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform"
+          MODE="${{ github.event.inputs.BUILD_MODE }}"
+          for f in ./common/scripts/setlocalversion ./${KERNEL_REPOS:-}/scripts/setlocalversion ./external/dtc/scripts/setlocalversion; do
+            [ -f "$f" ] || continue
+            echo "Modifying: $f"
+            sed -i 's/ -dirty//g' "$f"
+            sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' "$f"
+            if grep -q 'KERNELVERSION.*scm_version' "$f"; then
+              sed -i "s|echo \"\${KERNELVERSION}.*scm_version}\"|echo \"\${KERNELVERSION}-${KANDROID_VERSION}-${SUFFIX}\"|" "$f"
+            elif grep -q 'echo "\$res"' "$f"; then
+              if [ "$MODE" = "fast" ]; then
+                sed -i "s/^res=.*/res=\"-${KANDROID_VERSION}-${SUFFIX}\"/" "$f"
+              else
+                tac "$f" | sed "0,/echo \"\\\$res\"/s//res=\\\$(echo \\\$res | cut -d- -f1-2)-${SUFFIX}; echo \"\\\$res\";/" | tac > "$f.tmp" && mv "$f.tmp" "$f"
+              fi
+            else
+              echo "echo \"\$res-${SUFFIX}\"" >> "$f"
+            fi
+            chmod +x "$f"
+          done
+
+      - name: HTFG Inject
+        env:
+          DEBUG_TOOL_UID: ${{ github.event.inputs.DEBUG_TOOL_UID }}
+        run: |
+          set -euo pipefail
+          MODE="${{ github.event.inputs.BUILD_MODE }}"
+          if [ "$MODE" = "stock" ]; then
+            DEFCONFIG="arch/arm64/configs/mgk_64_k510_defconfig"
+          else
+            DEFCONFIG="arch/arm64/configs/gki_defconfig"
+          fi
+          HTFG_ALLOW_TOOL_UID="$([ "$DEBUG_TOOL_UID" = "true" ] && echo 1 || echo 0)"
+          HTFG_SRC_DIR="$RUNNER_TEMP/htfg" \
+          HTFG_KERNEL_TREE="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/common" \
+          HTFG_DEFCONFIG="$DEFCONFIG" \
+          HTFG_FAKE_CONFIG=1 \
+          HTFG_KHEADERS_FILTER=1 \
+          HTFG_ALLOW_TOOL_UID="$HTFG_ALLOW_TOOL_UID" \
+          HTFG_REV="$GITHUB_SHA" \
+          bash "$RUNNER_TEMP/htfg/htfg_apply.sh"
+
+      - name: Custom BUILD_TIME
+        shell: bash
+        run: |
+          set -euo pipefail
+          DATESTR="${{ github.event.inputs.BUILD_TIME }}"
+          if [ -z "$DATESTR" ] || [ "$DATESTR" = "-1" ] || [ "$DATESTR" = "F" ]; then
+            echo "::error::BUILD_TIME must be a literal timestamp"
+            exit 1
+          fi
+          {
+            echo "KBUILD_BUILD_TIMESTAMP=$DATESTR"
+            echo "KBUILD_BUILD_VERSION=1"
+            echo "KBUILD_BUILD_USER=build-user"
+            echo "KBUILD_BUILD_HOST=build-host"
+          } >> "$GITHUB_ENV"
+          cd "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform"
+          for f in ./common/scripts/mkcompile_h ./${KERNEL_REPOS:-}/scripts/mkcompile_h; do
+            [ -f "$f" ] || continue
+            if grep -q 'UTS_VERSION=' "$f"; then
+              perl -pi -e "s{UTS_VERSION=\"\\\$\\(.*?\\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"}" "$f"
+            else
+              perl -0777 -pi -e "s{cat <<EOF}{cat <<EOF\n#undef UTS_VERSION\n#define UTS_VERSION \"#1 SMP PREEMPT $DATESTR\" } unless /UTS_VERSION/" "$f"
+            fi
+          done
+
+      - name: Disable GPUEB
+        if: ${{ env.KERNEL_VERSION == '5.10' && startsWith(env.CPU, 'mt') }}
+        run: |
+          set -euo pipefail
+          f="kernel_workspace/kernel-5.10/drivers/gpu/mediatek/Makefile"
+          [ -f "$f" ] || { echo "::error::GPUEB Makefile not found: $f"; exit 1; }
+          sed -i '/obj-y.*gpueb/d' "$f"
+
+      - name: Fix libbpf for new glibc
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/common"
+          f="./tools/lib/bpf/libbpf.c"
+          if [ -f "$f" ]; then
+            sed -i -E 's/(\bres = )strstr\(sym_name, "\.llvm\."\)/\1(char *)strstr(sym_name, ".llvm.")/' "$f"
+            sed -i -E 's/(\bnext_path = )strchr\(s, '"'"':'"'"'\)/\1(char *)strchr(s, '"'"':'"'"')/' "$f"
+            grep -nE '\(char \*\)(strstr|strchr)' "$f" || echo "libbpf: current glibc needs no cast"
+          fi
+
+      - name: Build Kernel FAST
+        if: ${{ github.event.inputs.BUILD_MODE == 'fast' }}
+        id: fast_build
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform"
+
+          if [[ -f ./common/build.config.arm ]] && grep -q '^LLVM_IAS=1' ./common/build.config.arm; then
+            USE_LLVM_IAS=true
+          else
+            USE_LLVM_IAS=false
+          fi
+
+          CLANG_PREBUILT_NAME=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" -maxdepth 1 -type d -name 'prebuilts*' -exec test -d '{}/clang/host/linux-x86' \; -print | head -1 || true)
+          CLANG_PREBUILT_NAME=$(basename "${CLANG_PREBUILT_NAME:-}")
+          KERNEL_BUILD_TOOLS_PREBUILT_NAME=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" -maxdepth 1 -type d -name 'prebuilts*' -exec test -d '{}/kernel-build-tools' \; -print | head -1 || true)
+          KERNEL_BUILD_TOOLS_PREBUILT_NAME=$(basename "${KERNEL_BUILD_TOOLS_PREBUILT_NAME:-}")
+
+          CLANG_PREBUILT_BIN=""
+          if [[ -f ./common/build.config.common ]]; then
+            CLANG_PREBUILT_BIN=$(grep '^CLANG_PREBUILT_BIN=' ./common/build.config.common | cut -d'=' -f2- || true)
+          fi
+          if [[ -z "$CLANG_PREBUILT_BIN" ]]; then
+            CLANG_PREBUILT_BIN="${CLANG_PREBUILT_NAME}/clang/host/linux-x86/clang-zakozako/bin"
+          fi
+          if [[ "$CLANG_PREBUILT_BIN" =~ clang-(r[0-9a-z]+) ]]; then
+            CLANG_VERSION="${BASH_REMATCH[1]}"
+          elif [[ -f ./common/build.config.constants ]]; then
+            CLANG_VERSION=$(grep '^CLANG_VERSION=' ./common/build.config.constants | cut -d'=' -f2 || true)
+          fi
+          if [[ -z "${CLANG_VERSION:-}" ]]; then
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::clang version not found; falling back to the stock OPLUS build"
+            exit 0
+          fi
+          CLANG_PREBUILT_BIN="${CLANG_PREBUILT_BIN/\$\{CLANG_VERSION\}/$CLANG_VERSION}"
+          CLANG_PREBUILT_BIN="${CLANG_PREBUILT_BIN/clang-zakozako/clang-${CLANG_VERSION}}"
+          export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$CLANG_PREBUILT_BIN:$PATH"
+          CLANG_LIB_PATH="${CLANG_PREBUILT_BIN%/bin}"
+          if [[ -d "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$CLANG_LIB_PATH/lib" ]]; then
+            export LIBCLANG_PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$CLANG_LIB_PATH/lib"
+          elif [[ -d "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/clang-${CLANG_VERSION}/lib" ]]; then
+            export LIBCLANG_PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/clang-${CLANG_VERSION}/lib"
+          else
+            export LIBCLANG_PATH="$(clang --print-resource-dir 2>/dev/null | sed 's|/lib/clang/.*||')/lib"
+          fi
+          export PATH="/usr/lib/ccache:$PATH"
+
+          PAHOLE_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$KERNEL_BUILD_TOOLS_PREBUILT_NAME/kernel-build-tools/linux-x86/bin/pahole"
+          if [ ! -x "$PAHOLE_BIN" ]; then
+            PAHOLE_BIN="$(command -v pahole 2>/dev/null || true)"
+          fi
+          [ -x "$PAHOLE_BIN" ] || { echo "::error::pahole not found"; exit 13; }
+
+          if [[ "${ENABLE_RUST:-false}" == "true" ]]; then
+            RUST_TOOLS_PREBUILT_NAME=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" -maxdepth 1 -type d -name 'prebuilts*' -exec test -d '{}/rust' \; -print | head -1 || true)
+            RUST_TOOLS_PREBUILT_NAME=$(basename "${RUST_TOOLS_PREBUILT_NAME:-}")
+            RUSTC_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$RUST_TOOLS_PREBUILT_NAME/rust/linux-x86/$RUSTC_DIR_VERSION/bin/rustc"
+            [ -x "$RUSTC_BIN" ] || RUSTC_BIN="$(command -v rustc 2>/dev/null || true)"
+            [ -x "$RUSTC_BIN" ] || { echo "::error::rustc not found"; exit 13; }
+            export RUSTC="$RUSTC_BIN"
+            BINDGEN_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$CLANG_PREBUILT_NAME/clang-tools/linux-x86/bin/bindgen"
+            [ -x "$BINDGEN_BIN" ] || BINDGEN_BIN="$(command -v bindgen 2>/dev/null || true)"
+            [ -x "$BINDGEN_BIN" ] || { echo "::error::bindgen not found"; exit 13; }
+            export BINDGEN="$BINDGEN_BIN"
+          fi
+
+          REAL_CLANG_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$CLANG_PREBUILT_BIN/clang"
+          CC_WRAPPER="$GITHUB_WORKSPACE/kernel_workspace/cc-wrapper"
+          printf '#!/bin/bash\nexec ccache "%s" "$@"\n' "$REAL_CLANG_BIN" > "$CC_WRAPPER"
+          chmod +x "$CC_WRAPPER"
+
+          cd ./common
+          COMMON_REAL_PATH=$(pwd -P)
+          PLATFORM_REAL_PATH=$(dirname "$COMMON_REAL_PATH")
+          ROOT_REAL_PATH=$(dirname "$PLATFORM_REAL_PATH")
+          MAP="-fdebug-prefix-map=$ROOT_REAL_PATH=."
+          MPMAP="-fmacro-prefix-map=$ROOT_REAL_PATH=."
+          FPMAP="-ffile-prefix-map=$ROOT_REAL_PATH=."
+
+          # Stock gki_defconfig enables full LTO; do not force thin LTO and do
+          # not disable the stack protector (both were non-stock in Action-Build).
+          KCFLAGS="$MAP $FPMAP -no-canonical-prefixes -O2 -pipe -Wno-error -D__ANDROID_COMMON_KERNEL__"
+          KCPPFLAGS="$MPMAP"
+
+          MAKE_ARGS=(
+            LLVM=1
+            ARCH=arm64
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CC="$CC_WRAPPER"
+            HOSTCC="$CC_WRAPPER"
+            HOSTLD=ld.lld
+            LD=ld.lld
+            PAHOLE="$PAHOLE_BIN"
+            KCFLAGS="$KCFLAGS"
+            KCPPFLAGS="$KCPPFLAGS"
+          )
+          if [[ "$USE_LLVM_IAS" == "true" ]]; then
+            MAKE_ARGS+=(LLVM_IAS=1)
+          fi
+          if [[ "${ENABLE_RUST:-false}" == "true" ]]; then
+            MAKE_ARGS+=(RUSTC="$RUSTC" BINDGEN="$BINDGEN")
+          fi
+
+          make O=out "${MAKE_ARGS[@]}" gki_defconfig --no-print-directory
+          make O=out "${MAKE_ARGS[@]}" olddefconfig --no-print-directory
+          make -j"$(nproc --all)" O=out "${MAKE_ARGS[@]}"
+          ccache -s
+
+      - name: Build Kernel Stock
+        if: ${{ github.event.inputs.BUILD_MODE == 'stock' || steps.fast_build.outputs.fallback == 'true' }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/kernel_workspace"
+          # Build-only relaxations from the OPLUS flow; they do not change the
+          # generated .config (HTFG Verify checks the real output).
+          export KMI_SYMBOL_LIST_STRICT_MODE=0
+          export SYSTEM_DLKM_RE_SIGN=0
+          export BUILD_SYSTEM_DLKM=0
+          if [ -f ./kernel/build/oplus_build_kernel.sh ]; then
+            bash ./kernel/build/oplus_build_kernel.sh "${CPUD}" "${BUILD_METHOD}"
+          elif [ -f ./kernel_platform/oplus/build/oplus_build_kernel.sh ]; then
+            bash ./kernel_platform/oplus/build/oplus_build_kernel.sh "${CPUD}" "${BUILD_METHOD}"
+          elif [ -f ./kernel_platform/build_with_bazel.py ]; then
+            if [ -f ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ]; then
+              ./kernel_platform/oplus/bazel/oplus_modules_variant.sh "${CPUD}" "${BUILD_METHOD}"
+            fi
+            ./kernel_platform/build_with_bazel.py -t "${CPUD}" "${BUILD_METHOD}"
+          else
+            echo "::error::no stock build entry point found"
+            exit 1
+          fi
+
+      - name: HTFG Verify
+        env:
+          BUILD_MODE: ${{ github.event.inputs.BUILD_MODE }}
+          HTFG_ALLOW_TOOL_UID: ${{ github.event.inputs.DEBUG_TOOL_UID == 'true' && '1' || '0' }}
+          HTFG_SEARCH_ROOT: ${{ github.workspace }}/kernel_workspace
+        run: |
+          set -euo pipefail
+          export HTFG_STOCK_CONFIG="$RUNNER_TEMP/htfg-build/baseline/stock.config.gz"
+          FALLBACK="${{ steps.fast_build.outputs.fallback }}"
+          if [ "$BUILD_MODE" = "fast" ] && [ "$FALLBACK" != "true" ]; then
+            export HTFG_OUT_DIR="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/common/out"
+          fi
+          if [ "$BUILD_MODE" = "fast" ] && [ "$FALLBACK" = "true" ]; then
+            export BUILD_MODE=stock
+          fi
+          bash "$RUNNER_TEMP/htfg/htfg_verify.sh"
+
+      - name: Make AnyKernel3
+        run: |
+          set -euo pipefail
+          git clone https://github.com/osm0sis/AnyKernel3 --depth=1
+          rm -rf AnyKernel3/.git
+          sed -i 's|^kernel.string=.*|kernel.string=HTFG Clean Kernel|' AnyKernel3/anykernel.sh
+          sed -i 's|^do.devicecheck=.*|do.devicecheck=0|' AnyKernel3/anykernel.sh
+          sed -i 's|^do.modules=.*|do.modules=0|' AnyKernel3/anykernel.sh
+          sed -i 's|^do.systemless=.*|do.systemless=0|' AnyKernel3/anykernel.sh
+          sed -i 's|^do.cleanup=.*|do.cleanup=1|' AnyKernel3/anykernel.sh
+          sed -i -E '/^device\.name[0-9]+=/d' AnyKernel3/anykernel.sh
+
+          pick_image() {
+            local root="$1" f d s i
+            while IFS= read -r f; do
+              d="$(dirname "$f")"
+              for i in 1 2 3 4 5; do
+                s="$d/System.map"
+                if [ -f "$s" ] && grep -qE '[[:space:]]htfg_kernel_entry(\.|$)' "$s"; then
+                  printf '%s\n' "$f"
+                  return 0
+                fi
+                d="$(dirname "$d")"
+              done
+            done < <(find "$root" -path '*/prebuilts/*' -prune -o -name Image -type f -print 2>/dev/null)
+            return 1
+          }
+
+          image_path=""
+          for root in \
+            kernel_workspace/out_krn \
+            kernel_workspace/kernel_platform/common/out \
+            kernel_workspace/kernel_platform/out; do
+            [ -d "$root" ] || continue
+            image_path=$(pick_image "$root" || true)
+            [ -n "$image_path" ] && break
+          done
+          if [ -z "$image_path" ]; then
+            echo "::error::no Image next to a System.map containing htfg_kernel_entry"
+            exit 1
+          fi
+          echo "Image: $image_path"
+          cp "$image_path" AnyKernel3/Image
+          ls -l AnyKernel3/Image
+
+      - name: Upload AnyKernel3
+        uses: actions/upload-artifact@v7
+        with:
+          name: HTFG_Clean_${{ github.event.inputs.FILE }}_${{ github.event.inputs.SUFFIX }}
+          path: ./AnyKernel3/*
+
+      - name: Check Cache Size Before Save
+        if: ${{ github.event.inputs.BUILD_NOCACHE == 'false' }}
+        id: cache_size_check
+        run: |
+          if [ -d "${CCACHE_DIR:-/nonexistent}" ]; then
+            SIZE_MB=$(du -sm "$CCACHE_DIR" | cut -f1)
+            if [ "$SIZE_MB" -ge 5 ]; then
+              echo "ccache_save=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::ccache is smaller than 5 MB; skip save"
+              echo "ccache_save=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "ccache_save=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save Ccache
+        if: ${{ github.event.inputs.BUILD_NOCACHE == 'false' && steps.cache_size_check.outputs.ccache_save == 'true' && steps.restore-ccache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.event.inputs.FILE }}-${{ github.event.inputs.BUILD_MODE }}-v2
+
+      - name: Post-build Disk Check
+        run: df -h
