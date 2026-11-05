@@ -29,7 +29,7 @@ scripts/kconfig/merge_config.sh -m out/.config mgk_64_k510.config
 make O=out ... olddefconfig
 scripts/kconfig/merge_config.sh -m out/.config oplus6895.config
 make O=out ... olddefconfig
-make -j... O=out ...
+make -j... O=out Image
 ```
 
 - 与原厂 `kernel/build/oplus_build_kernel.sh unknown gki` 使用**同一组 defconfig 片段**（`gki_defconfig` + `arch/arm64/configs/mgk_64_k510_defconfig` + `kernel/configs/oplus6895.config`），所以最终 `.config` 应与原厂构建一致；`htfg_verify` 的 stock 全量 diff 仍会检查这一点。
@@ -37,6 +37,8 @@ make -j... O=out ...
 - 不执行 `build_dt_cmd` 和 `EXT_MODULES`：AnyKernel3 只打包 `Image`，dtbo/供应商 `.ko` 不在本项目产物里；DT 工具（`device/mediatek`、`vendor/mediatek/.../dct`）本 manifest 也不同步。
 - **HTFG 注入的 defconfig 是 `arch/arm64/configs/mgk_64_k510_defconfig`**（不是 `gki_defconfig`）。workflow 的 `HTFG Inject` 在 stock 模式传 `HTFG_DEFCONFIG=arch/arm64/configs/mgk_64_k510_defconfig`。
 - 不覆盖 `LTO` 环境变量，保持原厂 full LTO；不设置 `TMPFS_*`、`BBG`、`KPM`、`SUSFS`、`KSU`。
+- **私有仓库 runner 只有 7.7 GiB RAM**（公开仓库才是 16 GiB）。原厂 full LTO + KASAN 的 vmlinux 链接在 7.7 GiB + 3 GiB swap 上会耗尽内存，runner 失去通信后以 SIGTERM（143）终止。因此 workflow 用 `Maximize Build Space` 创建 **12 GiB LVM swap**，并给 make 传 `DEBUG_CFLAGS=-g0`：`.config` 仍是 `CONFIG_DEBUG_INFO=y`（全量 diff 通过），只是不生成 DWARF 调试信息；`-g` 不参与代码生成，调试段也不在 `arch/arm64/boot/Image` 里。
+- 只构建 `Image` 目标（不构建 `modules`/`Image.lz4`）：AnyKernel3 只打包 `Image`，vendor/in-tree `.ko` 不属于 boot 分区；`Image` 仍会生成 `vmlinux`、`System.map`、`Module.symvers`、`htfg.o` 和 `kernel/kheaders_data.tar.xz`。
 - 构建结束后脚本确认 `Image` 确实生成，并把 `HTFG_OUT_DIR` 写入 `$GITHUB_ENV` 供 `HTFG Verify` 使用。
 
 ### 2.2 fast（显式 fallback）

@@ -114,6 +114,11 @@ MAKE_ARGS=(
   PAHOLE="$PAHOLE_BIN"
   KCFLAGS="$KCFLAGS"
   KCPPFLAGS="$KCPPFLAGS"
+  # CONFIG_DEBUG_INFO stays y in .config, but the DWARF metadata is dropped.
+  # With full LTO+KASAN, the debug metadata is what makes the vmlinux link
+  # exceed the 7.7 GiB private-repo runner; -g does not change codegen and
+  # debug sections are not part of arch/arm64/boot/Image.
+  DEBUG_CFLAGS=-g0
 )
 if [ "$USE_LLVM_IAS" = "true" ]; then
   MAKE_ARGS+=(LLVM_IAS=1)
@@ -142,7 +147,11 @@ if [ "$MODE" = "stock" ]; then
 fi
 
 make "${MAKE_ARGS[@]}" olddefconfig --no-print-directory
-make -j"$(nproc --all)" "${MAKE_ARGS[@]}"
+# AnyKernel3 ships only Image; vendor/in-tree .ko files are not part of the
+# boot partition, so skip the module LTO links (a large time/disk saver on
+# the 7.7 GiB runner).  Image still depends on vmlinux, System.map,
+# Module.symvers, htfg.o and kernel/kheaders_data.tar.xz.
+make -j"$(nproc --all)" "${MAKE_ARGS[@]}" Image
 ccache -s || true
 
 IMAGE="$COMMON_REAL_PATH/out/arch/arm64/boot/Image"

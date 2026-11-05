@@ -81,7 +81,10 @@ jobs:
         env:
           ROOT_RESERVE_MB: '8192'
           TEMP_RESERVE_MB: '2048'
-          SWAP_SIZE_MB: '0'
+          # Private-repo runners have 7.7 GiB RAM.  Full-LTO vmlinux needs the
+          # extra swap; the build volume shrinks accordingly (still > source +
+          # Image-only out tree).
+          SWAP_SIZE_MB: '10240'
           REMOVE_DOTNET: 'true'
           REMOVE_ANDROID: 'true'
           REMOVE_HASKELL: 'true'
@@ -151,14 +154,10 @@ jobs:
       - name: Check Disk Space
         run: df -h
 
-      - name: Create and Enable 3G Swap
+      - name: Verify Swap
         run: |
           set -euo pipefail
-          sudo swapoff -a
-          sudo fallocate -l 3G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          swapon --show
           free -h
 
       - name: Set Cache Environment
