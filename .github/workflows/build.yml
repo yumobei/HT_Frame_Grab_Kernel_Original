@@ -81,10 +81,10 @@ jobs:
         env:
           ROOT_RESERVE_MB: '8192'
           TEMP_RESERVE_MB: '2048'
-          # Private-repo runners have 7.7 GiB RAM.  Full-LTO vmlinux needs the
-          # extra swap; the build volume shrinks accordingly (still > source +
-          # Image-only out tree).
-          SWAP_SIZE_MB: '10240'
+          # Full LTO + KASAN can exceed even the 16 GiB public-repo runner.
+          # Keep 8 GiB swap and a ~23 GiB build volume (source + Image-only
+          # out tree + ccache).
+          SWAP_SIZE_MB: '8192'
           REMOVE_DOTNET: 'true'
           REMOVE_ANDROID: 'true'
           REMOVE_HASKELL: 'true'
@@ -169,8 +169,8 @@ jobs:
         run: |
           set -euo pipefail
           # Keep ccache on the large build volume.  $HOME is on the 72 GiB
-          # root filesystem, which has only ~2 GiB free after Maximize; a 5 GiB
-          # cache there can fill it and take the runner down.
+          # root filesystem, which has only ~2 GiB free after Maximize; a
+          # multi-GiB cache there can fill it and take the runner down.
           CCACHE_DIR="$GITHUB_WORKSPACE/.ccache_${{ github.event.inputs.FILE }}_${{ github.event.inputs.BUILD_MODE }}"
           echo "CCACHE_DIR=$CCACHE_DIR" >> "$GITHUB_ENV"
           mkdir -p "$CCACHE_DIR"

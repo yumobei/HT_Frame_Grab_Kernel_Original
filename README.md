@@ -4,7 +4,7 @@
 
 本项目与旧 `HT_Frame_Grab_Kernel_CC` 的 App/reader/协议 **ABI 完全一致**：`UI_Fetch_KM` / `NEW_AI_JiaoBen` 不需要改代码；变化只在内核侧——去掉 KSU / SUSFS / KPM / BakaSU 管理器 / SUSFS 模块 / root 用户态，只保留 HTFG 的 `READ_MEM` / `FIND_PID` / `GET_VMAS` / `TOUCH_DEV` / `TOUCH_SEND`。
 
-> 状态：私有 GitHub 仓库；原厂 `boot.img` 被 `.gitignore` 排除，不随仓库上传。由用户自行构建、刷机、真机验证。
+> 状态：公开 GitHub 仓库（2026-11-05 由私有改为公开，以使用 4 vCPU / 16 GiB 的公开仓库 runner）；原厂 `boot.img` 被 `.gitignore` 排除，不随仓库上传。由用户自行构建、刷机、真机验证。
 
 ## 目标
 
