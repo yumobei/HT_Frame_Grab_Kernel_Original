@@ -158,8 +158,9 @@ jobs:
         run: |
           set -euo pipefail
           swapon --show
-          swapon --show | grep -q 'buildvg-swap' || {
-            echo "::error::LVM swap LV is not active"
+          # swapon prints the device node (/dev/dm-N), not the LV name.
+          [ "$(swapon --show --noheadings | wc -l)" -gt 0 ] || {
+            echo "::error::no active swap device"
             exit 1
           }
           free -h
