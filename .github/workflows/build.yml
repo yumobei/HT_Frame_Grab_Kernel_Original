@@ -52,7 +52,7 @@ env:
   CCACHE_NOHASHDIR: "true"
   CCACHE_NOHARDLINK: "true"
   CCACHE_IS_KERNEL_COMPILING: "true"
-  CCACHE_MAXSIZE: 5G
+  CCACHE_MAXSIZE: 4G
 
 jobs:
   build:
@@ -158,13 +158,22 @@ jobs:
         run: |
           set -euo pipefail
           swapon --show
+          swapon --show | grep -q 'buildvg-swap' || {
+            echo "::error::LVM swap LV is not active"
+            exit 1
+          }
           free -h
 
       - name: Set Cache Environment
         if: ${{ github.event.inputs.BUILD_NOCACHE == 'false' }}
         run: |
-          echo "CCACHE_DIR=$HOME/.ccache_${{ github.event.inputs.FILE }}_${{ github.event.inputs.BUILD_MODE }}" >> "$GITHUB_ENV"
-          mkdir -p "$HOME/.ccache_${{ github.event.inputs.FILE }}_${{ github.event.inputs.BUILD_MODE }}"
+          set -euo pipefail
+          # Keep ccache on the large build volume.  $HOME is on the 72 GiB
+          # root filesystem, which has only ~2 GiB free after Maximize; a 5 GiB
+          # cache there can fill it and take the runner down.
+          CCACHE_DIR="$GITHUB_WORKSPACE/.ccache_${{ github.event.inputs.FILE }}_${{ github.event.inputs.BUILD_MODE }}"
+          echo "CCACHE_DIR=$CCACHE_DIR" >> "$GITHUB_ENV"
+          mkdir -p "$CCACHE_DIR"
 
       - name: Install Dependencies
         run: |

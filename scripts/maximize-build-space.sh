@@ -80,7 +80,7 @@ echo
 
 echo "disabling and removing the old swap file..."
 sudo swapoff -a
-sudo rm -f /mnt/swapfile
+sudo rm -f /mnt/swapfile /swapfile
 
 echo "creating root-filesystem LVM PV..."
 ROOT_RESERVE_KB=$((ROOT_RESERVE_MB * 1024))

@@ -39,6 +39,7 @@ make -j... O=out Image
 - 不覆盖 `LTO` 环境变量，保持原厂 full LTO；不设置 `TMPFS_*`、`BBG`、`KPM`、`SUSFS`、`KSU`。
 - **私有仓库 runner 只有 7.7 GiB RAM**（公开仓库才是 16 GiB）。原厂 full LTO + KASAN 的 vmlinux 链接在 7.7 GiB + 3 GiB swap 上会耗尽内存，runner 失去通信后以 SIGTERM（143）终止。因此 workflow 用 `Maximize Build Space` 创建 **12 GiB LVM swap**，并给 make 传 `DEBUG_CFLAGS=-g0`：`.config` 仍是 `CONFIG_DEBUG_INFO=y`（全量 diff 通过），只是不生成 DWARF 调试信息；`-g` 不参与代码生成，调试段也不在 `arch/arm64/boot/Image` 里。
 - 只构建 `Image` 目标（不构建 `modules`/`Image.lz4`）：AnyKernel3 只打包 `Image`，vendor/in-tree `.ko` 不属于 boot 分区；`Image` 仍会生成 `vmlinux`、`System.map`、`Module.symvers`、`htfg.o` 和 `kernel/kheaders_data.tar.xz`。
+- **ccache 放在 `$GITHUB_WORKSPACE`（大卷），不放在 `$HOME`**：root 文件系统在 `Maximize Build Space` 后只剩约 2 GiB；旧做法把 5 GiB ccache 放到 root，编译中途可能把 root 写满，连带 runner 失去通信。`Maximize` 脚本也会删掉 runner 自带的 `/swapfile`，只保留 LVM swap。
 - 构建结束后脚本确认 `Image` 确实生成，并把 `HTFG_OUT_DIR` 写入 `$GITHUB_ENV` 供 `HTFG Verify` 使用。
 
 ### 2.2 fast（显式 fallback）
