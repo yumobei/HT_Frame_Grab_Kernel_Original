@@ -376,132 +376,26 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform"
-
-          if [[ -f ./common/build.config.arm ]] && grep -q '^LLVM_IAS=1' ./common/build.config.arm; then
-            USE_LLVM_IAS=true
-          else
-            USE_LLVM_IAS=false
-          fi
-
-          CLANG_PREBUILT_NAME=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" -maxdepth 1 -type d -name 'prebuilts*' -exec test -d '{}/clang/host/linux-x86' \; -print | head -1 || true)
-          CLANG_PREBUILT_NAME=$(basename "${CLANG_PREBUILT_NAME:-}")
-          KERNEL_BUILD_TOOLS_PREBUILT_NAME=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" -maxdepth 1 -type d -name 'prebuilts*' -exec test -d '{}/kernel-build-tools' \; -print | head -1 || true)
-          KERNEL_BUILD_TOOLS_PREBUILT_NAME=$(basename "${KERNEL_BUILD_TOOLS_PREBUILT_NAME:-}")
-
-          CLANG_PREBUILT_BIN=""
-          if [[ -f ./common/build.config.common ]]; then
-            CLANG_PREBUILT_BIN=$(grep '^CLANG_PREBUILT_BIN=' ./common/build.config.common | cut -d'=' -f2- || true)
-          fi
-          if [[ -z "$CLANG_PREBUILT_BIN" ]]; then
-            CLANG_PREBUILT_BIN="${CLANG_PREBUILT_NAME}/clang/host/linux-x86/clang-zakozako/bin"
-          fi
-          if [[ "$CLANG_PREBUILT_BIN" =~ clang-(r[0-9a-z]+) ]]; then
-            CLANG_VERSION="${BASH_REMATCH[1]}"
-          elif [[ -f ./common/build.config.constants ]]; then
-            CLANG_VERSION=$(grep '^CLANG_VERSION=' ./common/build.config.constants | cut -d'=' -f2 || true)
-          fi
-          if [[ -z "${CLANG_VERSION:-}" ]]; then
+          CLANG_PREBUILT_BIN=$(grep '^CLANG_PREBUILT_BIN=' ./common/build.config.common 2>/dev/null | cut -d'=' -f2- || true)
+          if [[ ! "$CLANG_PREBUILT_BIN" =~ clang-(r[0-9a-z]+) ]]; then
             echo "fallback=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::clang version not found; falling back to the stock OPLUS build"
+            echo "::warning::clang version not found; falling back to the stock path"
             exit 0
           fi
-          CLANG_PREBUILT_BIN="${CLANG_PREBUILT_BIN/\$\{CLANG_VERSION\}/$CLANG_VERSION}"
-          CLANG_PREBUILT_BIN="${CLANG_PREBUILT_BIN/clang-zakozako/clang-${CLANG_VERSION}}"
-          export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$CLANG_PREBUILT_BIN:$PATH"
-          CLANG_LIB_PATH="${CLANG_PREBUILT_BIN%/bin}"
-          if [[ -d "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$CLANG_LIB_PATH/lib" ]]; then
-            export LIBCLANG_PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$CLANG_LIB_PATH/lib"
-          elif [[ -d "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/clang-${CLANG_VERSION}/lib" ]]; then
-            export LIBCLANG_PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/clang-${CLANG_VERSION}/lib"
-          else
-            export LIBCLANG_PATH="$(clang --print-resource-dir 2>/dev/null | sed 's|/lib/clang/.*||')/lib"
-          fi
-          export PATH="/usr/lib/ccache:$PATH"
-
-          PAHOLE_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$KERNEL_BUILD_TOOLS_PREBUILT_NAME/kernel-build-tools/linux-x86/bin/pahole"
-          if [ ! -x "$PAHOLE_BIN" ]; then
-            PAHOLE_BIN="$(command -v pahole 2>/dev/null || true)"
-          fi
-          [ -x "$PAHOLE_BIN" ] || { echo "::error::pahole not found"; exit 13; }
-
-          if [[ "${ENABLE_RUST:-false}" == "true" ]]; then
-            RUST_TOOLS_PREBUILT_NAME=$(find "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform" -maxdepth 1 -type d -name 'prebuilts*' -exec test -d '{}/rust' \; -print | head -1 || true)
-            RUST_TOOLS_PREBUILT_NAME=$(basename "${RUST_TOOLS_PREBUILT_NAME:-}")
-            RUSTC_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$RUST_TOOLS_PREBUILT_NAME/rust/linux-x86/$RUSTC_DIR_VERSION/bin/rustc"
-            [ -x "$RUSTC_BIN" ] || RUSTC_BIN="$(command -v rustc 2>/dev/null || true)"
-            [ -x "$RUSTC_BIN" ] || { echo "::error::rustc not found"; exit 13; }
-            export RUSTC="$RUSTC_BIN"
-            BINDGEN_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$CLANG_PREBUILT_NAME/clang-tools/linux-x86/bin/bindgen"
-            [ -x "$BINDGEN_BIN" ] || BINDGEN_BIN="$(command -v bindgen 2>/dev/null || true)"
-            [ -x "$BINDGEN_BIN" ] || { echo "::error::bindgen not found"; exit 13; }
-            export BINDGEN="$BINDGEN_BIN"
-          fi
-
-          REAL_CLANG_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$CLANG_PREBUILT_BIN/clang"
-          CC_WRAPPER="$GITHUB_WORKSPACE/kernel_workspace/cc-wrapper"
-          printf '#!/bin/bash\nexec ccache "%s" "$@"\n' "$REAL_CLANG_BIN" > "$CC_WRAPPER"
-          chmod +x "$CC_WRAPPER"
-
-          cd ./common
-          COMMON_REAL_PATH=$(pwd -P)
-          PLATFORM_REAL_PATH=$(dirname "$COMMON_REAL_PATH")
-          ROOT_REAL_PATH=$(dirname "$PLATFORM_REAL_PATH")
-          MAP="-fdebug-prefix-map=$ROOT_REAL_PATH=."
-          MPMAP="-fmacro-prefix-map=$ROOT_REAL_PATH=."
-          FPMAP="-ffile-prefix-map=$ROOT_REAL_PATH=."
-
-          # Stock gki_defconfig enables full LTO; do not force thin LTO and do
-          # not disable the stack protector (both were non-stock in Action-Build).
-          KCFLAGS="$MAP $FPMAP -no-canonical-prefixes -O2 -pipe -Wno-error -D__ANDROID_COMMON_KERNEL__"
-          KCPPFLAGS="$MPMAP"
-
-          MAKE_ARGS=(
-            LLVM=1
-            ARCH=arm64
-            CROSS_COMPILE=aarch64-linux-gnu-
-            CC="$CC_WRAPPER"
-            HOSTCC="$CC_WRAPPER"
-            HOSTLD=ld.lld
-            LD=ld.lld
-            PAHOLE="$PAHOLE_BIN"
-            KCFLAGS="$KCFLAGS"
-            KCPPFLAGS="$KCPPFLAGS"
-          )
-          if [[ "$USE_LLVM_IAS" == "true" ]]; then
-            MAKE_ARGS+=(LLVM_IAS=1)
-          fi
-          if [[ "${ENABLE_RUST:-false}" == "true" ]]; then
-            MAKE_ARGS+=(RUSTC="$RUSTC" BINDGEN="$BINDGEN")
-          fi
-
-          make O=out "${MAKE_ARGS[@]}" gki_defconfig --no-print-directory
-          make O=out "${MAKE_ARGS[@]}" olddefconfig --no-print-directory
-          make -j"$(nproc --all)" O=out "${MAKE_ARGS[@]}"
-          ccache -s
+          bash "$RUNNER_TEMP/htfg-build/scripts/build_kernel_direct.sh" fast
 
       - name: Build Kernel Stock
         if: ${{ github.event.inputs.BUILD_MODE == 'stock' || steps.fast_build.outputs.fallback == 'true' }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/kernel_workspace"
-          # Build-only relaxations from the OPLUS flow; they do not change the
-          # generated .config (HTFG Verify checks the real output).
-          export KMI_SYMBOL_LIST_STRICT_MODE=0
-          export SYSTEM_DLKM_RE_SIGN=0
-          export BUILD_SYSTEM_DLKM=0
-          if [ -f ./kernel/build/oplus_build_kernel.sh ]; then
-            bash ./kernel/build/oplus_build_kernel.sh "${CPUD}" "${BUILD_METHOD}"
-          elif [ -f ./kernel_platform/oplus/build/oplus_build_kernel.sh ]; then
-            bash ./kernel_platform/oplus/build/oplus_build_kernel.sh "${CPUD}" "${BUILD_METHOD}"
-          elif [ -f ./kernel_platform/build_with_bazel.py ]; then
-            if [ -f ./kernel_platform/oplus/bazel/oplus_modules_variant.sh ]; then
-              ./kernel_platform/oplus/bazel/oplus_modules_variant.sh "${CPUD}" "${BUILD_METHOD}"
-            fi
-            ./kernel_platform/build_with_bazel.py -t "${CPUD}" "${BUILD_METHOD}"
-          else
-            echo "::error::no stock build entry point found"
-            exit 1
-          fi
+          # If the fast step fell back, HTFG was appended to gki_defconfig only.
+          # The stock build merges mgk_64_k510_defconfig, so make sure the
+          # symbol is there too (idempotent in the normal stock path).
+          F=./kernel_platform/common/arch/arm64/configs/mgk_64_k510_defconfig
+          [ -f "$F" ] || { echo "::error::$F not found"; exit 1; }
+          grep -qx 'CONFIG_HTFG=y' "$F" || echo 'CONFIG_HTFG=y' >> "$F"
+          bash "$RUNNER_TEMP/htfg-build/scripts/build_kernel_direct.sh" stock
 
       - name: HTFG Verify
         env:

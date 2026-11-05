@@ -68,7 +68,7 @@ if (!htfg_identity_allowed()) return -EINVAL;
 见 `docs/build.md`。要点：
 
 - workflow 不 clone Action-Build；manifest 以 vendored XML 放在 `manifest/`；
-- stock：`kernel/build/oplus_build_kernel.sh unknown gki`（`mgk_64_k510_defconfig` + OPLUS overlays）；
+- stock：`scripts/build_kernel_direct.sh stock`（直接 make；片段 = `gki_defconfig` + `mgk_64_k510_defconfig` + `oplus6895.config`，与原厂 `kernel/build/oplus_build_kernel.sh unknown gki` 相同）；
 - fast：直接 `make gki_defconfig`，只作显式 fallback；
 - `KBUILD_BUILD_USER=build-user`、`HOST=build-host`、`VERSION=1`、`TIMESTAMP` 原厂值；`setlocalversion` 强制后缀；`mkcompile_h` 强制 `#1 SMP PREEMPT ...`；
 - clean AnyKernel3（osm0sis 模板），只放 `Image`。

@@ -19,25 +19,30 @@
 
 ### 2.1 stock（默认）
 
-```
-cd kernel_workspace
-./kernel/build/oplus_build_kernel.sh unknown gki
-```
-
-- `unknown` 是 `oplus_setup.sh` 的 `choose_platform` 默认值（落到 6895）；`gki` 是 build type（user）。
-- 脚本内部用 `kernel-5.10/scripts/gen_build_config.py --kernel-defconfig mgk_64_k510_defconfig --kernel-defconfig-overlays oplus6895.config ...`，再走 `kernel/build/build.sh`。
-- 因此 **HTFG 注入的 defconfig 是 `arch/arm64/configs/mgk_64_k510_defconfig`**，不是 `gki_defconfig`。workflow 的 `HTFG Inject` 在 stock 模式传 `HTFG_DEFCONFIG=arch/arm64/configs/mgk_64_k510_defconfig`。
-- `oplus_build_kernel.sh` 内部已经用 `POST_DEFCONFIG_CMDS="exit 0"` 跳过 defconfig 检查；workflow 里对 `build.config.gki`/`common_kernels.bzl` 的 `check_defconfig` 处理只是防御性 build-mechanics，不改生成的 `.config`。
-- 按旧 OPLUS 流程设置 `KMI_SYMBOL_LIST_STRICT_MODE=0`、`SYSTEM_DLKM_RE_SIGN=0`、`BUILD_SYSTEM_DLKM=0`（只为构建通过；`htfg_verify` 仍对最终 `.config` 做全量 stock diff）。
-- 不覆盖 `LTO` 环境变量，让 OPLUS 脚本按原厂 build.config 走 full LTO；不设置 `TMPFS_*`、`BBG`、`KPM`、`SUSFS`、`KSU`。
-
-### 2.2 fast（显式 fallback）
+`scripts/build_kernel_direct.sh stock` 直接在内核源码树里生成与 OPLUS 脚本相同组合的 `.config` 并 `make`：
 
 ```
 cd kernel_workspace/kernel_platform/common
 make O=out ... gki_defconfig
+# 等价于 OPLUS 的 gen_build_config.py + make <fragment>.config：
+scripts/kconfig/merge_config.sh -m out/.config mgk_64_k510.config
+make O=out ... olddefconfig
+scripts/kconfig/merge_config.sh -m out/.config oplus6895.config
 make O=out ... olddefconfig
 make -j... O=out ...
+```
+
+- 与原厂 `kernel/build/oplus_build_kernel.sh unknown gki` 使用**同一组 defconfig 片段**（`gki_defconfig` + `arch/arm64/configs/mgk_64_k510_defconfig` + `kernel/configs/oplus6895.config`），所以最终 `.config` 应与原厂构建一致；`htfg_verify` 的 stock 全量 diff 仍会检查这一点。
+- 不再调用 `kernel/build/oplus_build_kernel.sh`：它依赖的 `kernel-5.10/scripts/gen_build_config.py` 是 **Python 2**（`print '...'`），在 runner 的 `python -> python3` 下直接 `SyntaxError`；该旧布局还把工具链写在 `kernel/prebuilts*` 下，而本 manifest 放在 `kernel_platform/`。
+- 不执行 `build_dt_cmd` 和 `EXT_MODULES`：AnyKernel3 只打包 `Image`，dtbo/供应商 `.ko` 不在本项目产物里；DT 工具（`device/mediatek`、`vendor/mediatek/.../dct`）本 manifest 也不同步。
+- **HTFG 注入的 defconfig 是 `arch/arm64/configs/mgk_64_k510_defconfig`**（不是 `gki_defconfig`）。workflow 的 `HTFG Inject` 在 stock 模式传 `HTFG_DEFCONFIG=arch/arm64/configs/mgk_64_k510_defconfig`。
+- 不覆盖 `LTO` 环境变量，保持原厂 full LTO；不设置 `TMPFS_*`、`BBG`、`KPM`、`SUSFS`、`KSU`。
+- 构建结束后脚本确认 `Image` 确实生成，并把 `HTFG_OUT_DIR` 写入 `$GITHUB_ENV` 供 `HTFG Verify` 使用。
+
+### 2.2 fast（显式 fallback）
+
+```
+scripts/build_kernel_direct.sh fast     # gki_defconfig + make
 ```
 
 - 只用于 stock 路径在 runner 上跑不动/跑不通时的诊断/备用。
@@ -75,7 +80,7 @@ make -j... O=out ...
 7. `HTFG Inject`（复制 5 文件、挂 drivers、patch `kernel/sys.c`、fake config、kheaders）。
 8. `Custom BUILD_TIME`（`KBUILD_BUILD_*` + `mkcompile_h`）。
 9. `Disable GPUEB`（MTK 5.10；沿用旧工作流能开机的修正）、`Fix libbpf`。
-10. `Build Kernel FAST`（仅 fast）或 `Build Kernel Stock`。
+10. `Build Kernel FAST`（仅 fast）或 `Build Kernel Stock`；两者都调用 `scripts/build_kernel_direct.sh`。
 11. `HTFG Verify`（构建后、AK3 前）。
 12. `Make AnyKernel3`（`osm0sis/AnyKernel3`，只放 `Image`）。
 13. `Upload AnyKernel3`；ccache 保存。

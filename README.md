@@ -58,7 +58,7 @@ docs/                     设计、构建、验证、检测面说明
 - `FILE=oneplus_ace_race_v`
 - `SUFFIX=9-o-g38e2c85bc7af`
 - `BUILD_TIME=Mon Jan 12 09:35:58 UTC 2026`
-- `BUILD_MODE=stock`（默认；走 `kernel/build/oplus_build_kernel.sh unknown gki`）
+- `BUILD_MODE=stock`（默认；直接 `make`，配置片段与原厂 `kernel/build/oplus_build_kernel.sh unknown gki` 相同：`gki_defconfig` + `mgk_64_k510_defconfig` + `oplus6895.config`）
 - `DEBUG_TOOL_UID=false`（生产必须 false）
 - `BUILD_NOCACHE=false`
 
