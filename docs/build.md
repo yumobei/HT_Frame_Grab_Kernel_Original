@@ -37,6 +37,7 @@ make -j... O=out Image
 - 不执行 `build_dt_cmd` 和 `EXT_MODULES`：AnyKernel3 只打包 `Image`，dtbo/供应商 `.ko` 不在本项目产物里；DT 工具（`device/mediatek`、`vendor/mediatek/.../dct`）本 manifest 也不同步。
 - **HTFG 注入的 defconfig 是 `arch/arm64/configs/mgk_64_k510_defconfig`**（不是 `gki_defconfig`）。workflow 的 `HTFG Inject` 在 stock 模式传 `HTFG_DEFCONFIG=arch/arm64/configs/mgk_64_k510_defconfig`。
 - 不覆盖 `LTO` 环境变量，保持原厂 full LTO；不设置 `TMPFS_*`、`BBG`、`KPM`、`SUSFS`、`KSU`。
+- **`BRANCH` / `KMI_GENERATION` 从 `common/build.config.common` 解析后显式传给 make**：顶层 Makefile 的 `filechk_kernel.release` 把这两个变量作为 `scripts/setlocalversion` 的第 2/3 个参数；OPLUS 的 `build.sh` 通过 `set -a` source 配置文件让 make 继承，直接 `make` 不会。缺了它们 `setlocalversion` 只输出 `-o-g<sha>`，`Custom Kernel Suffix` 再拼接就变成 `-o-9-o-g<sha>`，`HTFG Verify` 的 `UTS_RELEASE` 精确校验会失败（实测 `5.10.236-o-9-o-g38e2c85bc7af`）。传入 `BRANCH=android12-5.10`、`KMI_GENERATION=9` 后输出 `-android12-9-o-g<sha>`，后缀注入（`cut -d- -f1-2` 保留 `-android12`）最终得到原厂的 `5.10.236-android12-9-o-g38e2c85bc7af`。
 - **runner 内存**：本仓库已设为 public，标准 runner 为 4 vCPU / 16 GiB RAM。此前私有仓库只有 2 vCPU / 7.7 GiB，full LTO + KASAN 的 vmlinux 链接会把 runner 打挂（SIGTERM 143 / lost communication）。为留足余量，workflow 仍用 `Maximize Build Space` 创建 **8 GiB LVM swap**（build 卷约 23 GiB），并给 make 传 `DEBUG_CFLAGS=-g0`：`.config` 仍是 `CONFIG_DEBUG_INFO=y`（全量 diff 通过），只是不生成 DWARF 调试信息；`-g` 不参与代码生成，调试段也不在 `arch/arm64/boot/Image` 里。
 - 只构建 `Image` 目标（不构建 `modules`/`Image.lz4`）：AnyKernel3 只打包 `Image`，vendor/in-tree `.ko` 不属于 boot 分区；`Image` 仍会生成 `vmlinux`、`System.map`、`Module.symvers`、`htfg.o` 和 `kernel/kheaders_data.tar.xz`。
 - **ccache 放在 `$GITHUB_WORKSPACE`（大卷），不放在 `$HOME`**：root 文件系统在 `Maximize Build Space` 后只剩约 2 GiB；旧做法把多 GiB ccache 放到 root，编译中途可能把 root 写满，连带 runner 失去通信。ccache 上限 4 GiB；`Maximize` 脚本也会删掉 runner 自带的 `/swapfile`，只保留 LVM swap。
@@ -59,11 +60,11 @@ scripts/build_kernel_direct.sh fast     # gki_defconfig + make
 
 原厂 `CONFIG_LTO_CLANG_FULL=y` + `KASAN/KFENCE/UBSAN/CFI_CLANG`，标准 GitHub runner（4 vCPU/16 GB）可能 OOM 或超时。当前 workflow：
 
-- `Maximize Build Space` 合并 root + `/mnt` 的空间，挂一个大的 ext4 到 `$GITHUB_WORKSPACE`；
-- `Create and Enable 3G Swap` 增加 3 GB swap；
+- `Maximize Build Space` 合并 root + `/mnt` 的空间，挂一个大的 ext4 到 `$GITHUB_WORKSPACE`，并创建 **8 GiB LVM swap**（build 卷约 23 GiB）；
+- 给 make 传 `DEBUG_CFLAGS=-g0`：`.config` 仍是 `CONFIG_DEBUG_INFO=y`（全量 diff 通过），只去掉 DWARF 元数据；`-g` 不参与代码生成，调试段也不进 `arch/arm64/boot/Image`；
 - 默认 stock；如果 OOM/超时，先换更大 runner，或显式选择 `BUILD_MODE=fast`（接受 config 偏差，并在 `docs/detection-surface.md` 登记）。
 
-没有使用 `-g0` 之类“关调试信息换构建”的隐式手段；如果将来需要，必须作为显式输入并在 build-info 记录，不能静默。
+`DEBUG_CFLAGS=-g0` 是当前 workflow 的固定行为（不是隐藏开关）：它解决 full LTO + KASAN 在 runner 上 `vmlinux` 链接被 SIGTERM 的问题；若将来需要调整，必须同步更新本节与 `docs/verify.md` 的校验口径。
 
 ## 4. Manifest 与源码
 

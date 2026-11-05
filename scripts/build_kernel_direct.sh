@@ -37,8 +37,17 @@ KERNEL_BUILD_TOOLS_PREBUILT_NAME=$(find "$KP" -maxdepth 1 -type d -name 'prebuil
 KERNEL_BUILD_TOOLS_PREBUILT_NAME=$(basename "${KERNEL_BUILD_TOOLS_PREBUILT_NAME:-}")
 
 CLANG_PREBUILT_BIN=""
+# BRANCH and KMI_GENERATION feed scripts/setlocalversion through the top-level
+# Makefile (filechk_kernel.release).  The OPLUS build.sh gets them as exported
+# environment variables from build.config.common (sourced with "set -a"); a
+# direct "make" does not, and then setlocalversion prints only "-o-g<sha>"
+# instead of "-android12-9-o-g<sha>".  Pass them explicitly.
+BRANCH_VALUE=""
+KMI_GENERATION_VALUE=""
 if [ -f ./common/build.config.common ]; then
   CLANG_PREBUILT_BIN=$(grep '^CLANG_PREBUILT_BIN=' ./common/build.config.common | cut -d'=' -f2- || true)
+  BRANCH_VALUE=$(grep '^BRANCH=' ./common/build.config.common | cut -d'=' -f2- || true)
+  KMI_GENERATION_VALUE=$(grep '^KMI_GENERATION=' ./common/build.config.common | cut -d'=' -f2- || true)
 fi
 if [ -z "$CLANG_PREBUILT_BIN" ]; then
   CLANG_PREBUILT_BIN="${CLANG_PREBUILT_NAME}/clang/host/linux-x86/clang-zakozako/bin"
@@ -122,6 +131,14 @@ MAKE_ARGS=(
 )
 if [ "$USE_LLVM_IAS" = "true" ]; then
   MAKE_ARGS+=(LLVM_IAS=1)
+fi
+# setlocalversion's [branch] [kmi-generation] arguments; without them the
+# kernel release loses the "-android12-9" prefix and HTFG Verify fails the
+# exact UTS_RELEASE check.
+if [ -n "$BRANCH_VALUE" ] && [ -n "$KMI_GENERATION_VALUE" ]; then
+  MAKE_ARGS+=(BRANCH="$BRANCH_VALUE" KMI_GENERATION="$KMI_GENERATION_VALUE")
+else
+  echo "::warning::BRANCH/KMI_GENERATION not found in common/build.config.common; kernel release will miss the -androidXX-N prefix"
 fi
 if [ "${ENABLE_RUST:-false}" = "true" ]; then
   MAKE_ARGS+=(RUSTC="$RUSTC" BINDGEN="$BINDGEN")
