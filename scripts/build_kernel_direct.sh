@@ -136,9 +136,9 @@ if [ "$MODE" = "stock" ]; then
   # The OPLUS script passes these two fragments to "make" in this order, and
   # the kernel %.config rule runs merge_config.sh + olddefconfig per fragment.
   # Reproduce that sequence; merge_config.sh -m writes ./.config (cwd = out).
-  ( cd out && ../scripts/kconfig/merge_config.sh -m .config "$FRAG_DIR/mgk_64_k510.config" )
+  ( cd out && sh ../scripts/kconfig/merge_config.sh -m .config "$FRAG_DIR/mgk_64_k510.config" )
   make "${MAKE_ARGS[@]}" olddefconfig --no-print-directory
-  ( cd out && ../scripts/kconfig/merge_config.sh -m .config "$FRAG_DIR/oplus6895.config" )
+  ( cd out && sh ../scripts/kconfig/merge_config.sh -m .config "$FRAG_DIR/oplus6895.config" )
 fi
 
 make "${MAKE_ARGS[@]}" olddefconfig --no-print-directory
