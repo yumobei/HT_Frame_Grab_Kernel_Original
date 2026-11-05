@@ -32,7 +32,7 @@ make O=out ... olddefconfig
 make -j... O=out Image
 ```
 
-- 与原厂 `kernel/build/oplus_build_kernel.sh unknown gki` 使用**同一组 defconfig 片段**（`gki_defconfig` + `arch/arm64/configs/mgk_64_k510_defconfig` + `kernel/configs/oplus6895.config`），所以最终 `.config` 应与原厂构建一致；`htfg_verify` 的 stock 全量 diff 仍会检查这一点。
+- 与原厂 `kernel/build/oplus_build_kernel.sh unknown gki` 使用**同一组 defconfig 片段**（`gki_defconfig` + `arch/arm64/configs/mgk_64_k510_defconfig` + `kernel/configs/oplus6895.config`），所以最终 `.config` 应与原厂构建一致；`htfg_verify` 的 stock 全量 diff 仍会检查这一点。唯一例外是公开分支的热驱动符号名：原厂 vendor 树用 `CONFIG_MTK_REALME_THERMAL=m`，公开分支改为 `CONFIG_MTK_OPLUS_THERMAL=m`；REALME 驱动未公开，无法精确还原。verify 只对这一精确配对放行并 warning，其他差异仍判红。
 - 不再调用 `kernel/build/oplus_build_kernel.sh`：它依赖的 `kernel-5.10/scripts/gen_build_config.py` 是 **Python 2**（`print '...'`），在 runner 的 `python -> python3` 下直接 `SyntaxError`；该旧布局还把工具链写在 `kernel/prebuilts*` 下，而本 manifest 放在 `kernel_platform/`。
 - 不执行 `build_dt_cmd` 和 `EXT_MODULES`：AnyKernel3 只打包 `Image`，dtbo/供应商 `.ko` 不在本项目产物里；DT 工具（`device/mediatek`、`vendor/mediatek/.../dct`）本 manifest 也不同步。
 - **HTFG 注入的 defconfig 是 `arch/arm64/configs/mgk_64_k510_defconfig`**（不是 `gki_defconfig`）。workflow 的 `HTFG Inject` 在 stock 模式传 `HTFG_DEFCONFIG=arch/arm64/configs/mgk_64_k510_defconfig`。

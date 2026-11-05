@@ -8,7 +8,7 @@
 |---|---|---|---|
 | `/proc/version` / `uname` | `5.10.236-android12-9-o-g38e2c85bc7af (build-user@build-host) ... #1 SMP PREEMPT Mon Jan 12 09:35:58 UTC 2026` | 同左 | `KBUILD_BUILD_USER/HOST/VERSION/TIMESTAMP` + `setlocalversion` + `mkcompile_h` |
 | `linux_banner` 的 user@host | `build-user@build-host` | 同左 | 不再出现 `runner@...` |
-| `/proc/config.gz` | 无 KSU/SUSFS/KPM/BBG/HTFG | 同左 | fake `config_data` 只过滤 `^CONFIG_HTFG`/`^# CONFIG_HTFG` |
+| `/proc/config.gz` | 无 KSU/SUSFS/KPM/BBG/HTFG | 同左；唯一已知差异是 thermal 符号名（见 §4.1） | fake `config_data` 只过滤 `^CONFIG_HTFG`/`^# CONFIG_HTFG` |
 | `/sys/kernel/kheaders.tar.xz` | 无 HTFG | 无 HTFG | `gen_kheaders.sh` 删除 `include/linux/htfg.h`、`include/config/HTFG*`，过滤 `autoconf.h`/`auto.conf` |
 | `/sys/kernel/btf/vmlinux` | 无（BTF 关闭） | 无 | 不启用 `CONFIG_DEBUG_INFO_BTF` |
 | `/proc/kallsyms` | 无 `ksu_`/`susfs`/`kpm`；有原厂符号 | 有 `htfg_kernel_entry`/`htfg_*` | 本 ROM 普通 App/shell 读不了；root/特权可读，属残余 |
@@ -44,6 +44,7 @@
 ## 4. 不可消除的残余
 
 1. **源码基线**：公开 manifest 分支头不等于原厂 `38e2c85...`；即使 banner/config 完全一致，代码级差异仍可能存在。vendor 模块 CRC/vermagic 是首要风险。
+   - 已实测到 1 个具体 config 差异：公开分支把原厂 vendor 树的 `CONFIG_MTK_REALME_THERMAL=m` 换成了 `CONFIG_MTK_OPLUS_THERMAL=m`；realme 热驱动源码未公开，无法精确还原。`htfg_verify` 只对这一精确配对放行并打印 warning，其他任何 config 差异仍判红。
 2. **Image build ID/hash**：任何改动都无法与原厂一致；普通 App 读不到，root/特权可读。
 3. **`htfg_*` 符号**：本 ROM App/shell 读不了 `/proc/kallsyms`；root/特权可读。若威胁模型包含“设备上已有 root 的检测器”，这一项无解（除非改符号名/裁 KALLSYMS，但那会引入新的 config 差异）。
 4. **bootloader/TEE/AVB/Play Integrity**：不在本项目范围。

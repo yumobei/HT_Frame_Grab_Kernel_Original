@@ -15,6 +15,8 @@
 
 fast 模式跳过全量 config diff，但关键项仍检查；日志会出现 fast warning。不要把 fast 的 PASS 当成 stock 等价。
 
+stock 模式的全量 diff 允许一个已知的源码漂移配对：`+CONFIG_MTK_OPLUS_THERMAL=m` / `-CONFIG_MTK_REALME_THERMAL=m`（公开分支 vs 原厂 vendor 树）；日志会打印 known public-branch drift warning，其他任何差异仍然失败。
+
 ## 2. 紫罗兰 / 刷机前
 
 1. 下载 artifact；解压得到 AnyKernel3 文件树（含 `Image`）。

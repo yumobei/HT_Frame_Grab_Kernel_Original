@@ -247,11 +247,25 @@ check_config_diff() {
     rm -f "$tmp_stock" "$tmp_build"
 
     if [ -n "$diffout" ]; then
-        echo "HTFG verify: unexpected config differences (stock vs build):" >&2
-        printf '%s\n' "$diffout" | sed -n '1,80p' >&2
-        die "built .config differs from the stock baseline beyond HTFG"
+        # Known source drift: the stock image was built from the vendor tree
+        # with CONFIG_MTK_REALME_THERMAL=m.  The public
+        # oneplus/mt6895_v_15.0.0_ace_race branch renamed that driver to
+        # CONFIG_MTK_OPLUS_THERMAL=m and does not publish the realme driver.
+        # Allow exactly this pair; any other difference still fails.
+        drift="$(printf '%s\n' "$diffout" \
+            | grep -Fvx -e '+CONFIG_MTK_OPLUS_THERMAL=m' \
+                        -e '-CONFIG_MTK_REALME_THERMAL=m' || true)"
+        if [ -z "$drift" ] \
+            && printf '%s\n' "$diffout" | grep -Fqx '+CONFIG_MTK_OPLUS_THERMAL=m' \
+            && printf '%s\n' "$diffout" | grep -Fqx -- '-CONFIG_MTK_REALME_THERMAL=m'; then
+            warn "known public-branch drift: MTK_OPLUS_THERMAL replaces the stock vendor tree's MTK_REALME_THERMAL"
+        else
+            echo "HTFG verify: unexpected config differences (stock vs build):" >&2
+            printf '%s\n' "$diffout" | sed -n '1,80p' >&2
+            die "built .config differs from the stock baseline beyond HTFG"
+        fi
     fi
-    echo "OK: .config matches stock except CONFIG_HTFG*"
+    echo "OK: .config matches stock except CONFIG_HTFG* and the documented thermal-name drift"
 }
 
 if [ "$BUILD_MODE" = "stock" ]; then
