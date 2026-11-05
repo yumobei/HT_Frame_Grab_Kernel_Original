@@ -395,6 +395,9 @@ jobs:
           F=./kernel_platform/common/arch/arm64/configs/mgk_64_k510_defconfig
           [ -f "$F" ] || { echo "::error::$F not found"; exit 1; }
           grep -qx 'CONFIG_HTFG=y' "$F" || echo 'CONFIG_HTFG=y' >> "$F"
+          if [ "${{ github.event.inputs.DEBUG_TOOL_UID }}" = "true" ]; then
+            grep -qx 'CONFIG_HTFG_ALLOW_TOOL_UID=y' "$F" || echo 'CONFIG_HTFG_ALLOW_TOOL_UID=y' >> "$F"
+          fi
           bash "$RUNNER_TEMP/htfg-build/scripts/build_kernel_direct.sh" stock
 
       - name: HTFG Verify
