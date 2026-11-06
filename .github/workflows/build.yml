@@ -477,26 +477,9 @@ jobs:
           fi
           bash "$RUNNER_TEMP/htfg/htfg_verify.sh"
 
-      - name: Make AnyKernel3
+      - name: Make Image Artifact
         run: |
           set -euo pipefail
-          PIN_FILE="$RUNNER_TEMP/htfg-build/manifest/pinned-sources.txt"
-          AK3_SHA="$(sed -n 's/^ANYKERNEL3_SHA=//p' "$PIN_FILE" | head -n 1 | tr -d '[:space:]')"
-          [ -n "$AK3_SHA" ] || { echo "::error::ANYKERNEL3_SHA is empty in $PIN_FILE"; exit 1; }
-          git clone https://github.com/osm0sis/AnyKernel3
-          git -C AnyKernel3 checkout -q --detach "$AK3_SHA"
-          rm -rf AnyKernel3/.git
-          sed -i 's|^kernel.string=.*|kernel.string=HTFG Clean Kernel|' AnyKernel3/anykernel.sh
-          sed -i 's|^do.devicecheck=.*|do.devicecheck=1|' AnyKernel3/anykernel.sh
-          sed -i 's|^do.modules=.*|do.modules=0|' AnyKernel3/anykernel.sh
-          sed -i 's|^do.systemless=.*|do.systemless=0|' AnyKernel3/anykernel.sh
-          sed -i 's|^do.cleanup=.*|do.cleanup=1|' AnyKernel3/anykernel.sh
-          sed -i 's|^device\.name1=.*|device.name1=OP5911|' AnyKernel3/anykernel.sh
-          sed -i 's|^device\.name2=.*|device.name2=PGZ110|' AnyKernel3/anykernel.sh
-          sed -i -E '/^device\.name[3-9]=/d' AnyKernel3/anykernel.sh
-          grep -qx 'do.devicecheck=1' AnyKernel3/anykernel.sh || { echo "::error::AK3 do.devicecheck not set"; exit 1; }
-          grep -qx 'device.name1=OP5911' AnyKernel3/anykernel.sh || { echo "::error::AK3 device.name1 not set"; exit 1; }
-          grep -qx 'device.name2=PGZ110' AnyKernel3/anykernel.sh || { echo "::error::AK3 device.name2 not set"; exit 1; }
 
           pick_image() {
             local root="$1" f d s i
@@ -528,24 +511,29 @@ jobs:
             exit 1
           fi
           echo "Image: $image_path"
-          cp "$image_path" AnyKernel3/Image
+
+          rm -rf ImageArtifact
+          mkdir -p ImageArtifact
+          cp "$image_path" ImageArtifact/Image
           OUT_DIR="$(cd "$(dirname "$image_path")/../../.." && pwd)"
           REL="$(sed -n 's/^#define UTS_RELEASE "\(.*\)"$/\1/p' "$OUT_DIR/include/generated/utsrelease.h" 2>/dev/null | head -n 1 || true)"
+          IMG_SHA="$(sha256sum ImageArtifact/Image | cut -d' ' -f1)"
           {
             echo "build_mode=${EFFECTIVE_BUILD_MODE:-unknown}"
             echo "kernel_source_sha=${KERNEL_SRC_SHA:-unknown}"
             echo "kernel_release=${REL:-unknown}"
-            echo "image_sha256=$(sha256sum AnyKernel3/Image | cut -d' ' -f1)"
+            echo "image_sha256=${IMG_SHA}"
             echo "build_time=${{ github.event.inputs.BUILD_TIME }}"
-          } > AnyKernel3/htfg-build-info.txt
-          cat AnyKernel3/htfg-build-info.txt
-          ls -l AnyKernel3/Image
+          } > ImageArtifact/htfg-build-info.txt
+          ( cd ImageArtifact && sha256sum Image htfg-build-info.txt > SHA256SUMS )
+          cat ImageArtifact/htfg-build-info.txt
+          ls -l ImageArtifact
 
-      - name: Upload AnyKernel3
+      - name: Upload Image Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: HTFG_Clean_${{ github.event.inputs.FILE }}_${{ steps.effective_mode.outputs.mode }}_${{ github.event.inputs.SUFFIX }}
-          path: ./AnyKernel3/*
+          name: HTFG_Image_${{ github.event.inputs.FILE }}_${{ steps.effective_mode.outputs.mode }}_${{ github.event.inputs.SUFFIX }}
+          path: ./ImageArtifact/*
 
       - name: Check Cache Size Before Save
         if: ${{ github.event.inputs.BUILD_NOCACHE == 'false' }}

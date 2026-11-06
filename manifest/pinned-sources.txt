@@ -13,6 +13,3 @@ KERNEL_SHA=05dd76e8b6e4969b7bcda3edc53a98ea441d90f5
 # OnePlusOSS/android_vendor_mediatek_kernel_modules_mt6895
 # Not built by this project (Image only); recorded for documentation.
 # VENDOR_SHA=4f849d49f244ba656c2d258c09095a88fdf54566
-
-# osm0sis/AnyKernel3 template (artifact container; pin the tested template).
-ANYKERNEL3_SHA=41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1

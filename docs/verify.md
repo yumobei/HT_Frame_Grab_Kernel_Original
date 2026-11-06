@@ -20,7 +20,7 @@ stock 模式的全量 diff 允许一个已知的源码漂移配对：`+CONFIG_MT
 
 ## 2. 紫罗兰 / 刷机前
 
-1. 下载 artifact；解压得到 AnyKernel3 文件树（含 `Image` 与 `htfg-build-info.txt`）。先核对 `htfg-build-info.txt` 的 `kernel_source_sha`（应为 pinned 的 `05dd76e8...`）、`build_mode`、`image_sha256`。
+1. 下载 artifact；解压得到 `Image`、`htfg-build-info.txt`、`SHA256SUMS`（Image-only 产物，无 AnyKernel3 文件）。先核对 `htfg-build-info.txt` 的 `kernel_source_sha`（应为 pinned 的 `05dd76e8...`）、`build_mode`、`image_sha256`。
 2. 用紫罗兰“制作 GKI 镜像”以**原厂 boot.img** 为底，把 `Image` 打进去，得到 `boot-new.img`。
 3. 解包 `boot-new.img`，取 kernel 解压后的 `Image`：
    - `sha256sum` 必须等于 artifact 里的 `Image`；
@@ -28,7 +28,7 @@ stock 模式的全量 diff 允许一个已知的源码漂移配对：`+CONFIG_MT
    - 若紫罗兰工具对 AVB/verity 有重签/剥离选项，按你现有离线流程处理；不要在未核对的情况下刷入。
 4. 备份原厂 boot 和当前 root boot；A/B 两个 slot 都备份。
 
-> AVB 说明：stock boot 末尾有 AVB footer，boot 内也可能有 vbmeta 结构。不同离线工具对它的处理（重签/剥离/保留）不同。`HTFG Verify` 只保证 AK3 里的 `Image` 正确，**不保证**你的离线打包工具已经正确处理 AVB。刷前先确认工具的选项；如果首启失败，回滚原厂 boot。
+> AVB 说明：stock boot 末尾有 AVB footer，boot 内也可能有 vbmeta 结构。不同离线工具对它的处理（重签/剥离/保留）不同。`HTFG Verify` 只保证 artifact 里的 `Image` 正确，**不保证**你的离线打包工具已经正确处理 AVB。刷前先确认工具的选项；如果首启失败，回滚原厂 boot。
 
 ## 3. 刷机前清 root（必须）
 

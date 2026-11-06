@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Read-only post-build checks for an HTFG Clean Kernel artifact.
+"""Read-only post-build checks for an HTFG Image artifact.
 
 Usage:
   python tools/check_artifact.py <artifact.zip> \
       --boot <merged boot-new.img> \
       --stock-boot <stock boot.img>
 
-The script verifies the artifact zip, the Image embedded config/kheaders,
-the AnyKernel3 device guard, and (optionally) that the merged boot image
+The normal artifact is Image + htfg-build-info.txt (+ SHA256SUMS).
+Legacy AnyKernel3 zips (with anykernel.sh) are also accepted and get the
+additional device-guard checks.  The script verifies the Image, its
+embedded config/kheaders, and (optionally) that the merged boot image
 contains exactly the same kernel Image and the stock ramdisk/header.
 
 Exit code 0 = all checks passed; 1 = at least one failure.
@@ -96,19 +98,41 @@ def check_zip(z, r):
     r.ok("zip integrity")
 
     names = set(z.namelist())
-    missing = [n for n in ("Image", "anykernel.sh", "htfg-build-info.txt") if n not in names]
+    missing = [n for n in ("Image", "htfg-build-info.txt") if n not in names]
     if missing:
         r.fail("missing required member(s): %s" % ", ".join(missing))
         return False
     r.ok("required members present")
 
-    # AnyKernel3 template tools.  They are packaging helpers, not part of
-    # the kernel Image; the Violet merge path only uses Image.
-    for name in ("tools/magiskboot", "tools/magiskpolicy"):
-        if name in names:
-            r.ok("AK3 tool present: %s" % name)
-        else:
-            r.warn("AK3 tool missing: %s (zip may not be AK3-flashable)" % name)
+    if "anykernel.sh" in names:
+        r.ok("legacy AnyKernel3 artifact detected")
+        # AK3 template tools are packaging helpers, not part of the kernel
+        # Image; the Violet merge path only uses Image.
+        for name in ("tools/magiskboot", "tools/magiskpolicy"):
+            if name in names:
+                r.ok("AK3 tool present: %s" % name)
+            else:
+                r.warn("AK3 tool missing: %s (zip may not be AK3-flashable)" % name)
+    else:
+        r.ok("Image-only artifact (no anykernel.sh)")
+
+    if "SHA256SUMS" in names:
+        try:
+            text = z.read("SHA256SUMS").decode("ascii", "replace")
+            entries = {}
+            for line in text.splitlines():
+                parts = line.split()
+                if len(parts) == 2:
+                    entries[parts[1].lstrip("*")] = parts[0]
+            for member in ("Image", "htfg-build-info.txt"):
+                if member not in entries:
+                    r.warn("SHA256SUMS has no entry for %s" % member)
+                elif entries[member] == sha256(z.read(member)):
+                    r.ok("SHA256SUMS matches %s" % member)
+                else:
+                    r.fail("SHA256SUMS mismatch for %s" % member)
+        except (KeyError, OSError) as exc:
+            r.warn("cannot verify SHA256SUMS: %s" % exc)
     return True
 
 
@@ -444,7 +468,7 @@ def check_boot(path, stock_path, image_sha, r):
 
 def main():
     ap = argparse.ArgumentParser(description="Read-only checks for an HTFG Clean Kernel artifact.")
-    ap.add_argument("artifact", help="AnyKernel3 zip produced by the workflow")
+    ap.add_argument("artifact", help="Image artifact zip (legacy AnyKernel3 zip also accepted)")
     ap.add_argument("--boot", help="merged boot-new.img (optional)")
     ap.add_argument("--stock-boot", help="stock boot.img for header/ramdisk comparison")
     ap.add_argument("--baseline-config", default="baseline/stock.config.gz")
@@ -486,7 +510,8 @@ def main():
             print("RESULT: FAIL (%d failure(s))" % r.failures)
             return 1
 
-        check_anykernel(z, r)
+        if "anykernel.sh" in z.namelist():
+            check_anykernel(z, r)
         check_image_strings(img, args, r)
         check_ikconfig(img, args, stock_mode, r)
         check_kheaders(img, args, stock_mode, r)

@@ -17,7 +17,6 @@ Source pins live in `pinned-sources.txt`:
 - `KERNEL_SHA` — the reviewed OnePlusOSS kernel commit.  The workflow checks the
   synced kernel tree against it after `repo sync` and checks it out if the
   branch has moved; a failed fetch/checkout fails the build loudly.
-- `ANYKERNEL3_SHA` — the tested osm0sis/AnyKernel3 template.
 - `VENDOR_SHA` (commented) — documentation only; the vendor modules repo is not
   built here.
 

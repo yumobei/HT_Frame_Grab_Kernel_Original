@@ -62,7 +62,7 @@ docs/                     设计、构建、验证、检测面说明
 - `DEBUG_TOOL_UID=false`（生产必须 false）
 - `BUILD_NOCACHE=false`
 
-源码 pin：`manifest/pinned-sources.txt` 的 `KERNEL_SHA`（以及 `ANYKERNEL3_SHA`）。`Pin Kernel Source` 在 `repo sync` 后校验内核树，漂移时尝试 fetch/checkout 该提交，失败即红并提示更新 pin。报告层对齐：fake `/proc/config.gz` 与 kheaders 里的 thermal 符号报告为 stock 的 `CONFIG_MTK_REALME_THERMAL`；真实 `.config` 仍是 `CONFIG_MTK_OPLUS_THERMAL`（公开分支无 realme 驱动），verify 的 allowlist 保留。
+源码 pin：`manifest/pinned-sources.txt` 的 `KERNEL_SHA`。`Pin Kernel Source` 在 `repo sync` 后校验内核树，漂移时尝试 fetch/checkout 该提交，失败即红并提示更新 pin。报告层对齐：fake `/proc/config.gz` 与 kheaders 里的 thermal 符号报告为 stock 的 `CONFIG_MTK_REALME_THERMAL`；真实 `.config` 仍是 `CONFIG_MTK_OPLUS_THERMAL`（公开分支无 realme 驱动），verify 的 allowlist 保留。
 
 stock 路径的 full LTO + KASAN/CFI 对 runner 内存/时间要求高；失败时可显式改用 `BUILD_MODE=fast`（直接 `make gki_defconfig`），但 fast 不应用 OPLUS fragments，`htfg_verify` 会跳过全量 config diff 并给出偏差提示。详见 `docs/build.md`。
 
@@ -79,7 +79,7 @@ stock 路径的 full LTO + KASAN/CFI 对 runner 内存/时间要求高；失败�
 - `/sys/kernel/kheaders.tar.xz` 的成员名/内容不含 HTFG；
 - BTF 关闭。
 
-产物是干净 AnyKernel3（`osm0sis/AnyKernel3` 模板，按 `ANYKERNEL3_SHA` 钉版本；`do.devicecheck=1`，只接受 `OP5911`/`PGZ110`；根目录含 `Image` 与 `htfg-build-info.txt`）。artifact 名为 `HTFG_Clean_oneplus_ace_race_v_<stock|fast>_9-o-g38e2c85bc7af`。zip 的 `tools/magiskboot`、`tools/magiskpolicy` 是 AnyKernel3 模板自带的打包工具，位于 `tools/` 子目录，不在 `Image` 内；紫罗兰“制作 GKI 镜像”只取其中的 `Image`，不会执行它们。刷机、真机 vendor 模块/App 回归和检测面记录见 `docs/verify.md`。
+产物是 **Image-only** artifact：artifact 名为 `HTFG_Image_oneplus_ace_race_v_<stock|fast>_9-o-g38e2c85bc7af`，zip 根目录只有 `Image`、`htfg-build-info.txt`、`SHA256SUMS`。紫罗兰“制作 GKI 镜像”直接选 `Image` + 原厂 `boot.img`；不再包含 AnyKernel3 的 `tools/`、`META-INF`、`anykernel.sh`，也不能直接当 AK3 刷机包刷。刷机、真机 vendor 模块/App 回归和检测面记录见 `docs/verify.md`。
 
 下载产物后先跑 `python tools/check_artifact.py <zip> --boot <boot-new.img> --stock-boot 原厂镜像/boot.img`；刷机前/后的完整检查清单见 `docs/构建后验证清单.md`。
 
@@ -89,7 +89,7 @@ stock 路径的 full LTO + KASAN/CFI 对 runner 内存/时间要求高；失败�
 
 1. 备份原厂 `boot.img` 和当前 root `boot.img`；
 2. 在旧内核上停用/卸载 KSU 管理器、SUSFS 模块，清理 `/data/adb/ksu`、`/data/adb/modules`、`ksud`、`su` 包装、Magisk 残留；
-3. 用紫罗兰“制作 GKI 镜像”把 clean AK3 的 `Image` 打进原厂 `boot.img`，解包核对 `sha256sum`；
+3. 用紫罗兰“制作 GKI 镜像”把 clean artifact 的 `Image` 打进原厂 `boot.img`，解包核对 `sha256sum`；
 4. 刷入 boot（A/B 两个 slot 都备份）；
 5. 首启验证 `uname -r` / `/proc/version`、vendor 模块、App 拉取、触摸注入、Native Detector 基线。
 
