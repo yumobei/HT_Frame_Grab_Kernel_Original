@@ -4,7 +4,7 @@
 
 本项目与旧 `HT_Frame_Grab_Kernel_CC` 的 App/reader/协议 **ABI 完全一致**：`UI_Fetch_KM` / `NEW_AI_JiaoBen` 不需要改代码；变化只在内核侧——去掉 KSU / SUSFS / KPM / BakaSU 管理器 / SUSFS 模块 / root 用户态，只保留 HTFG 的 `READ_MEM` / `FIND_PID` / `GET_VMAS` / `TOUCH_DEV` / `TOUCH_SEND`。
 
-> 状态：公开 GitHub 仓库（2026-11-05 由私有改为公开，以使用 4 vCPU / 16 GiB 的公开仓库 runner）；原厂 `boot.img` 被 `.gitignore` 排除，不随仓库上传。由用户自行构建、刷机、真机验证。
+> 状态：**构建期间必须保持仓库为 public**（workflow 首个步骤会拒绝私有仓库并给出原因）；构建完成后可改回 private，产物/日志仍归仓库所有者。公开 runner 为 4 vCPU / 16 GiB；私有 Free 计划只有 2 vCPU / 7.7 GiB，full LTO 链接会失败（实测 63 分钟后在 `Build Kernel Stock` 被杀）。原厂 `boot.img` 被 `.gitignore` 排除，不随仓库上传。由用户自行构建、刷机、真机验证。
 
 ## 目标
 
@@ -62,6 +62,8 @@ docs/                     设计、构建、验证、检测面说明
 - `DEBUG_TOOL_UID=false`（生产必须 false）
 - `BUILD_NOCACHE=false`
 
+源码 pin：`manifest/pinned-sources.txt` 的 `KERNEL_SHA`（以及 `ANYKERNEL3_SHA`）。`Pin Kernel Source` 在 `repo sync` 后校验内核树，漂移时尝试 fetch/checkout 该提交，失败即红并提示更新 pin。报告层对齐：fake `/proc/config.gz` 与 kheaders 里的 thermal 符号报告为 stock 的 `CONFIG_MTK_REALME_THERMAL`；真实 `.config` 仍是 `CONFIG_MTK_OPLUS_THERMAL`（公开分支无 realme 驱动），verify 的 allowlist 保留。
+
 stock 路径的 full LTO + KASAN/CFI 对 runner 内存/时间要求高；失败时可显式改用 `BUILD_MODE=fast`（直接 `make gki_defconfig`），但 fast 不应用 OPLUS fragments，`htfg_verify` 会跳过全量 config diff 并给出偏差提示。详见 `docs/build.md`。
 
 ## 验证
@@ -69,13 +71,15 @@ stock 路径的 full LTO + KASAN/CFI 对 runner 内存/时间要求高；失败�
 构建后先看 `HTFG Verify` 是否 PASS。它检查：
 
 - `.config` 只有 `CONFIG_HTFG*` 相对原厂有差异（stock 模式；fast 模式跳过全量 diff）；
+- fake `/proc/config.gz`（`config_data.gz`）与最终 Image 内嵌 IKCONFIG 都与 `baseline/stock.config.gz` 逐字节相同（stock 模式）；
+- kheaders 报告 stock 的 thermal 符号集（无 `CONFIG_MTK_OPLUS_THERMAL`）；
 - `UTS_RELEASE` 精确等于 `5.10.236-android12-9-o-g38e2c85bc7af`；
 - `System.map` 有 `htfg_kernel_entry`、无 `ksu_`；
 - `Image` 中有完整原厂 banner/编译器串/构建时间，且无 `runner@`、无 KSU/SUSFS/KPM/BakaSU；
 - `/sys/kernel/kheaders.tar.xz` 的成员名/内容不含 HTFG；
 - BTF 关闭。
 
-产物是干净 AnyKernel3（`osm0sis/AnyKernel3` 模板，`do.devicecheck=0`，只含 `Image`）。刷机、紫罗兰“制作 GKI 镜像”、真机 vendor 模块/App 回归和检测面记录见 `docs/verify.md`。
+产物是干净 AnyKernel3（`osm0sis/AnyKernel3` 模板，按 `ANYKERNEL3_SHA` 钉版本；`do.devicecheck=1`，只接受 `OP5911`/`PGZ110`；根目录含 `Image` 与 `htfg-build-info.txt`）。artifact 名为 `HTFG_Clean_oneplus_ace_race_v_<stock|fast>_9-o-g38e2c85bc7af`。紫罗兰“制作 GKI 镜像”只取其中的 `Image`。刷机、真机 vendor 模块/App 回归和检测面记录见 `docs/verify.md`。
 
 ## 刷机顺序（重要）
 

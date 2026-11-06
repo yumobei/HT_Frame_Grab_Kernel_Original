@@ -1,0 +1,18 @@
+# Reviewed source pins for reproducible builds.
+#
+# The workflow keeps the manifest revisions as branches (Load Manifest Info
+# parses the kernel branch for CPU/version), then checks the synced kernel
+# tree against KERNEL_SHA before any local edit.  On a mismatch it tries to
+# fetch/checkout the pinned commit and fails loudly if that is not possible.
+# Update a pin only after reviewing the upstream branch and rebuilding.
+
+# OnePlusOSS/android_kernel_5.10_oneplus_mt6895
+# branch: oneplus/mt6895_v_15.0.0_ace_race (head checked 2026-11-05)
+KERNEL_SHA=05dd76e8b6e4969b7bcda3edc53a98ea441d90f5
+
+# OnePlusOSS/android_vendor_mediatek_kernel_modules_mt6895
+# Not built by this project (Image only); recorded for documentation.
+# VENDOR_SHA=4f849d49f244ba656c2d258c09095a88fdf54566
+
+# osm0sis/AnyKernel3 template (artifact container; pin the tested template).
+ANYKERNEL3_SHA=41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1

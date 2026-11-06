@@ -59,6 +59,15 @@ jobs:
     name: HTFG ${{ github.event.inputs.BUILD_MODE }} ${{ github.event.inputs.FILE }}
     runs-on: ubuntu-latest
     steps:
+      # Full LTO + KASAN does not fit on the 2 vCPU / 7.7 GiB runner that
+      # GitHub Free gives private repositories.  The repository is kept
+      # public while building and switched back to private afterwards.
+      - name: Require Public Repository
+        if: ${{ github.event.repository.private }}
+        run: |
+          echo "::error::Builds run only while this repository is public. Public runners provide 4 vCPU / 16 GiB; private Free-plan runners have 2 vCPU / 7.7 GiB and cannot link the full-LTO kernel. Set the repository public, run the build, then switch it back to private."
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@v7
 
@@ -234,9 +243,47 @@ jobs:
             echo "KERNEL_REPOS=$KERNEL_REPOS" >> "$GITHUB_ENV"
           fi
 
-          # Build-mechanics only: the stock OPLUS script may run a defconfig
-          # consistency check that rejects any added symbol.  This does not
-          # change the generated .config; HTFG Verify checks the real output.
+      # Pin the kernel tree before any local edits.  Checking out a different
+      # commit fails if tracked files are already modified, so the
+      # check_defconfig edits live in the separate step below.
+      - name: Pin Kernel Source
+        run: |
+          set -euo pipefail
+          PIN_FILE="$RUNNER_TEMP/htfg-build/manifest/pinned-sources.txt"
+          [ -f "$PIN_FILE" ] || { echo "::error::missing $PIN_FILE"; exit 1; }
+          PIN_SHA="$(sed -n 's/^KERNEL_SHA=//p' "$PIN_FILE" | head -n 1 | tr -d '[:space:]')"
+          [ -n "$PIN_SHA" ] || { echo "::error::KERNEL_SHA is empty in $PIN_FILE"; exit 1; }
+          KDIR="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/common"
+          [ -d "$KDIR" ] || { echo "::error::kernel tree not found: $KDIR"; exit 1; }
+          HEAD_SHA="$(git -C "$KDIR" rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$PIN_SHA" ]; then
+            echo "::warning::kernel source HEAD $HEAD_SHA != pinned $PIN_SHA; checking out the pinned commit"
+            git -C "$KDIR" fetch --depth=1 origin "$PIN_SHA" || {
+              echo "::error::cannot fetch pinned kernel commit $PIN_SHA; review the upstream branch and update manifest/pinned-sources.txt"
+              exit 1
+            }
+            git -C "$KDIR" checkout -q --detach "$PIN_SHA"
+            HEAD_SHA="$(git -C "$KDIR" rev-parse HEAD)"
+          fi
+          [ "$HEAD_SHA" = "$PIN_SHA" ] || {
+            echo "::error::kernel source pin failed: $HEAD_SHA != $PIN_SHA"
+            exit 1
+          }
+          echo "KERNEL_SRC_SHA=$PIN_SHA" >> "$GITHUB_ENV"
+          {
+            echo "### Kernel source"
+            echo ""
+            echo "- pinned commit: \`$PIN_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Kernel source pinned at $PIN_SHA"
+
+      # Build-mechanics only: the stock OPLUS script may run a defconfig
+      # consistency check that rejects any added symbol.  This does not
+      # change the generated .config; HTFG Verify checks the real output.
+      - name: Prepare Build Config
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/kernel_workspace"
           if grep -q 'check_defconfig' kernel_platform/common/build.config.gki 2>/dev/null; then
             sed -i 's/check_defconfig//' kernel_platform/common/build.config.gki
           fi
@@ -332,7 +379,7 @@ jobs:
           HTFG_FAKE_CONFIG=1 \
           HTFG_KHEADERS_FILTER=1 \
           HTFG_ALLOW_TOOL_UID="$HTFG_ALLOW_TOOL_UID" \
-          HTFG_REV="$GITHUB_SHA" \
+          HTFG_REV="${KERNEL_SRC_SHA:-$GITHUB_SHA}" \
           bash "$RUNNER_TEMP/htfg/htfg_apply.sh"
 
       - name: Custom BUILD_TIME
@@ -409,6 +456,19 @@ jobs:
           fi
           bash "$RUNNER_TEMP/htfg-build/scripts/build_kernel_direct.sh" stock
 
+      - name: Resolve Effective Build Mode
+        id: effective_mode
+        run: |
+          set -euo pipefail
+          MODE="${{ github.event.inputs.BUILD_MODE }}"
+          FALLBACK="${{ steps.fast_build.outputs.fallback }}"
+          if [ "$MODE" = "fast" ] && [ "$FALLBACK" = "true" ]; then
+            MODE=stock
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "EFFECTIVE_BUILD_MODE=$MODE" >> "$GITHUB_ENV"
+          echo "effective build mode: $MODE"
+
       - name: HTFG Verify
         env:
           BUILD_MODE: ${{ github.event.inputs.BUILD_MODE }}
@@ -429,14 +489,23 @@ jobs:
       - name: Make AnyKernel3
         run: |
           set -euo pipefail
-          git clone https://github.com/osm0sis/AnyKernel3 --depth=1
+          PIN_FILE="$RUNNER_TEMP/htfg-build/manifest/pinned-sources.txt"
+          AK3_SHA="$(sed -n 's/^ANYKERNEL3_SHA=//p' "$PIN_FILE" | head -n 1 | tr -d '[:space:]')"
+          [ -n "$AK3_SHA" ] || { echo "::error::ANYKERNEL3_SHA is empty in $PIN_FILE"; exit 1; }
+          git clone https://github.com/osm0sis/AnyKernel3
+          git -C AnyKernel3 checkout -q --detach "$AK3_SHA"
           rm -rf AnyKernel3/.git
           sed -i 's|^kernel.string=.*|kernel.string=HTFG Clean Kernel|' AnyKernel3/anykernel.sh
-          sed -i 's|^do.devicecheck=.*|do.devicecheck=0|' AnyKernel3/anykernel.sh
+          sed -i 's|^do.devicecheck=.*|do.devicecheck=1|' AnyKernel3/anykernel.sh
           sed -i 's|^do.modules=.*|do.modules=0|' AnyKernel3/anykernel.sh
           sed -i 's|^do.systemless=.*|do.systemless=0|' AnyKernel3/anykernel.sh
           sed -i 's|^do.cleanup=.*|do.cleanup=1|' AnyKernel3/anykernel.sh
-          sed -i -E '/^device\.name[0-9]+=/d' AnyKernel3/anykernel.sh
+          sed -i 's|^device\.name1=.*|device.name1=OP5911|' AnyKernel3/anykernel.sh
+          sed -i 's|^device\.name2=.*|device.name2=PGZ110|' AnyKernel3/anykernel.sh
+          sed -i -E '/^device\.name[3-9]=/d' AnyKernel3/anykernel.sh
+          grep -qx 'do.devicecheck=1' AnyKernel3/anykernel.sh || { echo "::error::AK3 do.devicecheck not set"; exit 1; }
+          grep -qx 'device.name1=OP5911' AnyKernel3/anykernel.sh || { echo "::error::AK3 device.name1 not set"; exit 1; }
+          grep -qx 'device.name2=PGZ110' AnyKernel3/anykernel.sh || { echo "::error::AK3 device.name2 not set"; exit 1; }
 
           pick_image() {
             local root="$1" f d s i
@@ -469,12 +538,22 @@ jobs:
           fi
           echo "Image: $image_path"
           cp "$image_path" AnyKernel3/Image
+          OUT_DIR="$(cd "$(dirname "$image_path")/../../.." && pwd)"
+          REL="$(sed -n 's/^#define UTS_RELEASE "\(.*\)"$/\1/p' "$OUT_DIR/include/generated/utsrelease.h" 2>/dev/null | head -n 1 || true)"
+          {
+            echo "build_mode=${EFFECTIVE_BUILD_MODE:-unknown}"
+            echo "kernel_source_sha=${KERNEL_SRC_SHA:-unknown}"
+            echo "kernel_release=${REL:-unknown}"
+            echo "image_sha256=$(sha256sum AnyKernel3/Image | cut -d' ' -f1)"
+            echo "build_time=${{ github.event.inputs.BUILD_TIME }}"
+          } > AnyKernel3/htfg-build-info.txt
+          cat AnyKernel3/htfg-build-info.txt
           ls -l AnyKernel3/Image
 
       - name: Upload AnyKernel3
         uses: actions/upload-artifact@v7
         with:
-          name: HTFG_Clean_${{ github.event.inputs.FILE }}_${{ github.event.inputs.SUFFIX }}
+          name: HTFG_Clean_${{ github.event.inputs.FILE }}_${{ steps.effective_mode.outputs.mode }}_${{ github.event.inputs.SUFFIX }}
           path: ./AnyKernel3/*
 
       - name: Check Cache Size Before Save

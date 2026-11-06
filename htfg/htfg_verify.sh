@@ -52,6 +52,25 @@ find_first() {
         "$@" -print 2>/dev/null | head -n 1 || true
 }
 
+# python3 is used to extract the IKCONFIG blob embedded in Image.
+PYTHON="${PYTHON:-}"
+if [ -z "$PYTHON" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+        PYTHON=python3
+    elif command -v python >/dev/null 2>&1; then
+        PYTHON=python
+    fi
+fi
+[ -n "$PYTHON" ] || die "python3/python not found (needed for the Image IKCONFIG check)"
+
+decompress_config() {  # $1=source (gzip or plain) $2=destination
+    if gzip -t "$1" 2>/dev/null; then
+        gzip -dc "$1" > "$2"
+    else
+        cp "$1" "$2"
+    fi
+}
+
 # ---- locate the output directory -----------------------------------------
 OUT="${HTFG_OUT_DIR:-}"
 if [ -z "$OUT" ]; then
@@ -85,6 +104,7 @@ KH="$OUT/kernel/kheaders_data.tar.xz"
 echo "HTFG verify: OUT=$OUT"
 echo "HTFG verify: CFG=$CFG"
 echo "HTFG verify: IMG=${IMG:-<not found>}"
+echo "HTFG verify: kernel source sha = ${KERNEL_SRC_SHA:-unknown}"
 
 [ -n "$IMG" ] && [ -f "$IMG" ] || die "Image not found under $OUT"
 
@@ -169,7 +189,7 @@ fi
 
 # ---- fake /proc/config.gz ------------------------------------------------
 verify_fake_config() {
-    local cfgz cfgd tmp linecnt
+    local cfgz cfgd tmp tmp_stock linecnt
     local bad_re
     bad_re='^(CONFIG_KSU|# CONFIG_KSU|CONFIG_KSU_SUSFS|# CONFIG_KSU_SUSFS|CONFIG_SUSFS|# CONFIG_SUSFS|CONFIG_KPM|# CONFIG_KPM|CONFIG_BBG|# CONFIG_BBG|CONFIG_HTFG|# CONFIG_HTFG)'
 
@@ -213,6 +233,30 @@ verify_fake_config() {
         die "fake config over-deleted CHECKSUM (bare HTFG/KSU pattern?)"
     fi
 
+    # The reported blob must be byte-identical to the stock one (stock mode
+    # only; fast mode has a different .config and skips this).
+    if [ "$BUILD_MODE" = "stock" ]; then
+        if [ -z "$STOCK_CONFIG" ]; then
+            warn "HTFG_STOCK_CONFIG not set; skipped exact fake config comparison"
+        elif [ ! -f "$STOCK_CONFIG" ]; then
+            rm -f "$tmp"
+            die "stock config baseline not found: $STOCK_CONFIG"
+        else
+            tmp_stock="$(mktemp)"
+            decompress_config "$STOCK_CONFIG" "$tmp_stock"
+            if ! cmp -s "$tmp_stock" "$tmp"; then
+                echo "fake config differs from the stock baseline:" >&2
+                diff -u "$tmp_stock" "$tmp" | sed -n '1,25p' >&2 || true
+                rm -f "$tmp" "$tmp_stock"
+                die "fake /proc/config.gz is not byte-identical to the stock baseline"
+            fi
+            rm -f "$tmp_stock"
+            echo "OK: fake /proc/config.gz is byte-identical to the stock baseline"
+        fi
+    else
+        echo "fast mode: skipped exact fake config comparison"
+    fi
+
     rm -f "$tmp"
     echo "OK: fake /proc/config.gz is clean"
 }
@@ -222,6 +266,65 @@ if [ "$FAKE_CONFIG" = "1" ]; then
 else
     warn "HTFG_FAKE_CONFIG=0; skipped /proc/config.gz check"
 fi
+
+# ---- config blob embedded in the final Image -----------------------------
+verify_image_ikconfig() {
+    local tmp tmp_stock
+    tmp="$(mktemp)"
+    if ! "$PYTHON" - "$IMG" "$tmp" <<'PY'
+import gzip
+import sys
+
+data = open(sys.argv[1], "rb").read()
+start = data.find(b"IKCFG_ST")
+if start < 0:
+    sys.exit("IKCFG_ST not found")
+end = data.find(b"IKCFG_ED", start + 8)
+if end < 0:
+    sys.exit("IKCFG_ED not found")
+try:
+    blob = gzip.decompress(data[start + 8:end])
+except Exception as exc:
+    sys.exit("IKCFG gzip decompress failed: %s" % exc)
+open(sys.argv[2], "wb").write(blob)
+PY
+    then
+        rm -f "$tmp"
+        die "cannot extract the embedded IKCONFIG from $IMG"
+    fi
+
+    if [ "$FAKE_CONFIG" != "1" ]; then
+        warn "HTFG_FAKE_CONFIG=0; skipped Image IKCONFIG content check"
+    elif [ "$BUILD_MODE" = "stock" ]; then
+        if [ -z "$STOCK_CONFIG" ]; then
+            warn "HTFG_STOCK_CONFIG not set; skipped exact Image config comparison"
+        elif [ ! -f "$STOCK_CONFIG" ]; then
+            rm -f "$tmp"
+            die "stock config baseline not found: $STOCK_CONFIG"
+        else
+            tmp_stock="$(mktemp)"
+            decompress_config "$STOCK_CONFIG" "$tmp_stock"
+            if ! cmp -s "$tmp_stock" "$tmp"; then
+                echo "Image embedded config differs from the stock baseline:" >&2
+                diff -u "$tmp_stock" "$tmp" | sed -n '1,25p' >&2 || true
+                rm -f "$tmp" "$tmp_stock"
+                die "Image embedded IKCONFIG is not byte-identical to the stock baseline"
+            fi
+            rm -f "$tmp_stock"
+            echo "OK: Image embedded IKCONFIG is byte-identical to the stock baseline"
+        fi
+    else
+        if grep -q '^CONFIG_HTFG' "$tmp"; then
+            rm -f "$tmp"
+            die "Image embedded IKCONFIG still contains CONFIG_HTFG"
+        fi
+        echo "OK: Image embedded IKCONFIG has no CONFIG_HTFG (fast mode)"
+    fi
+
+    rm -f "$tmp"
+}
+
+verify_image_ikconfig
 
 # ---- full config diff against the stock baseline -------------------------
 check_config_diff() {
@@ -350,6 +453,12 @@ if grep -qx 'CONFIG_IKHEADERS=y' "$CFG"; then
         fi
         if xz -dc "$KH" 2>/dev/null | grep -a 'CONFIG_HTFG' >/dev/null; then
             die "kheaders archive still contains CONFIG_HTFG"
+        fi
+        if [ "$BUILD_MODE" = "stock" ]; then
+            if xz -dc "$KH" 2>/dev/null | grep -a 'CONFIG_MTK_OPLUS_THERMAL' >/dev/null; then
+                die "kheaders archive still reports CONFIG_MTK_OPLUS_THERMAL"
+            fi
+            echo "OK: kheaders reports the stock thermal symbol set"
         fi
         echo "OK: kheaders archive has no HTFG"
     else

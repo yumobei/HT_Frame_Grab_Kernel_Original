@@ -11,3 +11,16 @@
 Refresh procedure when a new stock boot image is available: update this XML and
 the `README.md` build line, then re-run `tools/extract_stock_baseline.py` and
 update `baseline/`.
+
+Source pins live in `pinned-sources.txt`:
+
+- `KERNEL_SHA` — the reviewed OnePlusOSS kernel commit.  The workflow checks the
+  synced kernel tree against it after `repo sync` and checks it out if the
+  branch has moved; a failed fetch/checkout fails the build loudly.
+- `ANYKERNEL3_SHA` — the tested osm0sis/AnyKernel3 template.
+- `VENDOR_SHA` (commented) — documentation only; the vendor modules repo is not
+  built here.
+
+Update a pin only after reviewing the upstream branch (and, for the kernel,
+re-running the build/verify); never let the branch head silently change what is
+built.

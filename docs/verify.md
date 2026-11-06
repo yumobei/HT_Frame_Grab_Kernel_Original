@@ -6,20 +6,21 @@
 
 - `.config`：`CONFIG_HTFG=y`；无 `CONFIG_KSU/SUSFS/KPM/BBG`；生产无 `CONFIG_HTFG_ALLOW_TOOL_UID=y`；`INPUT`、`CRYPTO_SHA256`、`IKCONFIG`、`IKCONFIG_PROC`、`MODULES`、`MODVERSIONS`、`STACKPROTECTOR_STRONG` 为 `y`；`LTO_CLANG_FULL=y`、`LTO_CLANG_THIN` 非 `y`；`TMPFS_XATTR`/`TMPFS_POSIX_ACL` 非 `y`；`DEBUG_INFO_BTF` 非 `y`；`CC_VERSION_TEXT` 含原厂 clang 串。
 - stock 模式：用 `baseline/stock.config.gz` 做**全量排序 diff**，只允许 `CONFIG_HTFG*` 行不同；任何其他差异直接失败。
-- fake `/proc/config.gz`：`config_data.gz`/`config_data` 存在；无 KSU/SUSFS/KPM/BBG/HTFG 行；`IKCONFIG` 保留；`CHECKSUM` 不被误删。
+- fake `/proc/config.gz`：`config_data.gz`/`config_data` 存在；无 KSU/SUSFS/KPM/BBG/HTFG 行；`IKCONFIG` 保留；`CHECKSUM` 不被误删；stock 模式下与 `baseline/stock.config.gz` **逐字节相同**（`cmp`）。
+- 最终 `Image` 内嵌 IKCONFIG（`IKCFG_ST`/`IKCFG_ED` 之间的 gzip）：stock 模式下与 `baseline/stock.config.gz` 逐字节相同；fast 模式至少不得含 `CONFIG_HTFG`。
 - `UTS_RELEASE` 精确等于 `5.10.236-android12-9-o-g38e2c85bc7af`，无 `+`/`-dirty`。
 - `System.map` 有 `htfg_kernel_entry`、无 `ksu_`；`drivers/htfg/htfg.o` 存在；`modules.builtin` 无 `htfg`。
 - `Image` 字符串：完整原厂 banner（`build-user@build-host`）、原厂 clang 串、`#1 SMP PREEMPT Mon Jan 12 09:35:58 UTC 2026`；无 `runner@`；无 KSU/SUSFS/KPM/BakaSU 锚定串（不使用裸 `ksu`，避免 `CHECKSUM` 假阳性）。
-- kheaders：`kheaders_data.tar.xz` 成员名不含 `htfg`（不区分大小写），内容不含 `CONFIG_HTFG`。
+- kheaders：`kheaders_data.tar.xz` 成员名不含 `htfg`（不区分大小写），内容不含 `CONFIG_HTFG`；stock 模式还要求不出现 `CONFIG_MTK_OPLUS_THERMAL`（报告名已对齐为 stock 的 REALME）。
 - BTF：`.config` 关闭。
 
 fast 模式跳过全量 config diff，但关键项仍检查；日志会出现 fast warning。不要把 fast 的 PASS 当成 stock 等价。
 
-stock 模式的全量 diff 允许一个已知的源码漂移配对：`+CONFIG_MTK_OPLUS_THERMAL=m` / `-CONFIG_MTK_REALME_THERMAL=m`（公开分支 vs 原厂 vendor 树）；日志会打印 known public-branch drift warning，其他任何差异仍然失败。
+stock 模式的全量 diff 允许一个已知的源码漂移配对：`+CONFIG_MTK_OPLUS_THERMAL=m` / `-CONFIG_MTK_REALME_THERMAL=m`（**真实 `.config`**：公开分支 vs 原厂 vendor 树）；日志会打印 known public-branch drift warning，其他任何差异仍然失败。注意这与上面的“fake config/Image 逐字节相同”不矛盾：真实 `.config` 保留 OPLUS，报告给设备的 `config_data.gz`/IKCONFIG 已把 thermal 名替换为 REALME；前者由 allowlist 放行，后者必须与 stock 完全相等。
 
 ## 2. 紫罗兰 / 刷机前
 
-1. 下载 artifact；解压得到 AnyKernel3 文件树（含 `Image`）。
+1. 下载 artifact；解压得到 AnyKernel3 文件树（含 `Image` 与 `htfg-build-info.txt`）。先核对 `htfg-build-info.txt` 的 `kernel_source_sha`（应为 pinned 的 `05dd76e8...`）、`build_mode`、`image_sha256`。
 2. 用紫罗兰“制作 GKI 镜像”以**原厂 boot.img** 为底，把 `Image` 打进去，得到 `boot-new.img`。
 3. 解包 `boot-new.img`，取 kernel 解压后的 `Image`：
    - `sha256sum` 必须等于 artifact 里的 `Image`；
@@ -44,7 +45,7 @@ stock 模式的全量 diff 允许一个已知的源码漂移配对：`+CONFIG_MT
 在没有 root 的情况下，`dmesg`、`/proc/kallsyms`、`/sys/kernel/kheaders.tar.xz` 可能不可读；这些主要靠构建期检查。设备侧优先做：
 
 - `uname -r`、`cat /proc/version`：逐字匹配原厂 banner（含 `build-user@build-host`、`#1 SMP PREEMPT`、时间）。
-- `cat /proc/config.gz | gzip -dc`（若 shell 可读）：无 HTFG/KSU/SUSFS/KPM/BBG；`IKCONFIG`、`INPUT`、`CRYPTO_SHA256` 等仍在。若不可读，用构建期 verify 的 fake config 结果。
+- `/proc/config.gz`（adb shell 可读；普通 App 因 SELinux `neverallow untrusted_app config_gz` 读不到）：`adb shell 'zcat /proc/config.gz | sha256sum'` 必须等于 stock 的 `7d939635d77acbaa49a3e4ab2bdbb154c0a2c5e393b8057fa11a49071b56f149`（解压后 232546 字节）；同时 `grep -c CONFIG_MTK_OPLUS_THERMAL` 为 0、`grep -c CONFIG_MTK_REALME_THERMAL` 为 1。无 HTFG/KSU/SUSFS/KPM/BBG；`IKCONFIG`、`INPUT`、`CRYPTO_SHA256` 等仍在。
 - 功能回归：Wi-Fi/BT/相机/触摸/显示/传感器/蜂窝/音频；`lsmod` 看 vendor 模块是否加载。
 - 若某 vendor 模块报 `disagrees about version` / `invalid module format` / `Unknown symbol`：说明源码/CRC 与 stock 不一致；回退原厂 boot，记录日志，再评估 manifest 钉提交或换源码基线。不要在 clean boot 上保留 root 去“修”。
 

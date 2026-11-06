@@ -36,9 +36,11 @@ make -j... O=out Image
 - 不再调用 `kernel/build/oplus_build_kernel.sh`：它依赖的 `kernel-5.10/scripts/gen_build_config.py` 是 **Python 2**（`print '...'`），在 runner 的 `python -> python3` 下直接 `SyntaxError`；该旧布局还把工具链写在 `kernel/prebuilts*` 下，而本 manifest 放在 `kernel_platform/`。
 - 不执行 `build_dt_cmd` 和 `EXT_MODULES`：AnyKernel3 只打包 `Image`，dtbo/供应商 `.ko` 不在本项目产物里；DT 工具（`device/mediatek`、`vendor/mediatek/.../dct`）本 manifest 也不同步。
 - **HTFG 注入的 defconfig 是 `arch/arm64/configs/mgk_64_k510_defconfig`**（不是 `gki_defconfig`）。workflow 的 `HTFG Inject` 在 stock 模式传 `HTFG_DEFCONFIG=arch/arm64/configs/mgk_64_k510_defconfig`。
+- **报告层与真实配置分离**：真实 `.config` 保留 `CONFIG_MTK_OPLUS_THERMAL=m`（verify 的 allowlist 放行）；fake `config_data.gz` 与 kheaders 把报告名替换为 stock 的 `CONFIG_MTK_REALME_THERMAL`，使 `/proc/config.gz` 与 stock 逐字节相同（实测替换后 232546 字节全等）。这只改报告数据块，不改变编译配置/行为；`HTFG Verify` 在 stock 模式下对 fake config 和 Image 内嵌 IKCFG 做逐字节校验。
+- **源码 pin**：`Pin Kernel Source` 在 `repo sync` 之后、任何本地修改之前读取 `manifest/pinned-sources.txt` 的 `KERNEL_SHA`；HEAD 不一致时 `git fetch --depth=1` + `checkout --detach`，失败即红。check_defconfig 的 sed 拆到随后的 `Prepare Build Config`，避免本地修改阻止 checkout。
 - 不覆盖 `LTO` 环境变量，保持原厂 full LTO；不设置 `TMPFS_*`、`BBG`、`KPM`、`SUSFS`、`KSU`。
 - **`BRANCH` / `KMI_GENERATION` 从 `common/build.config.common` 解析后显式传给 make**：顶层 Makefile 的 `filechk_kernel.release` 把这两个变量作为 `scripts/setlocalversion` 的第 2/3 个参数；OPLUS 的 `build.sh` 通过 `set -a` source 配置文件让 make 继承，直接 `make` 不会。缺了它们 `setlocalversion` 只输出 `-o-g<sha>`，`Custom Kernel Suffix` 再拼接就变成 `-o-9-o-g<sha>`，`HTFG Verify` 的 `UTS_RELEASE` 精确校验会失败（实测 `5.10.236-o-9-o-g38e2c85bc7af`）。传入 `BRANCH=android12-5.10`、`KMI_GENERATION=9` 后输出 `-android12-9-o-g<sha>`，后缀注入（`cut -d- -f1-2` 保留 `-android12`）最终得到原厂的 `5.10.236-android12-9-o-g38e2c85bc7af`。
-- **runner 内存**：本仓库已设为 public，标准 runner 为 4 vCPU / 16 GiB RAM。此前私有仓库只有 2 vCPU / 7.7 GiB，full LTO + KASAN 的 vmlinux 链接会把 runner 打挂（SIGTERM 143 / lost communication）。为留足余量，workflow 仍用 `Maximize Build Space` 创建 **8 GiB LVM swap**（build 卷约 23 GiB），并给 make 传 `DEBUG_CFLAGS=-g0`：`.config` 仍是 `CONFIG_DEBUG_INFO=y`（全量 diff 通过），只是不生成 DWARF 调试信息；`-g` 不参与代码生成，调试段也不在 `arch/arm64/boot/Image` 里。
+- **只允许公开仓库构建**：workflow 第一步 `Require Public Repository` 在 `github.event.repository.private` 为真时直接失败并提示。原因：公开 runner 为 4 vCPU / 16 GiB；私有 Free 计划只有 2 vCPU / 7.7 GiB，full LTO + KASAN 的 vmlinux 链接会被打挂（实测 63 分钟后在 `Build Kernel Stock` 被杀）。流程是“仓库改 public → 构建 → 改回 private”；产物/日志仍归仓库所有者。为留足余量，workflow 仍用 `Maximize Build Space` 创建 **8 GiB LVM swap**（build 卷约 23 GiB），并给 make 传 `DEBUG_CFLAGS=-g0`：`.config` 仍是 `CONFIG_DEBUG_INFO=y`（全量 diff 通过），只是不生成 DWARF 调试信息；`-g` 不参与代码生成，调试段也不在 `arch/arm64/boot/Image` 里。
 - 只构建 `Image` 目标（不构建 `modules`/`Image.lz4`）：AnyKernel3 只打包 `Image`，vendor/in-tree `.ko` 不属于 boot 分区；`Image` 仍会生成 `vmlinux`、`System.map`、`Module.symvers`、`htfg.o` 和 `kernel/kheaders_data.tar.xz`。
 - **ccache 放在 `$GITHUB_WORKSPACE`（大卷），不放在 `$HOME`**：root 文件系统在 `Maximize Build Space` 后只剩约 2 GiB；旧做法把多 GiB ccache 放到 root，编译中途可能把 root 写满，连带 runner 失去通信。ccache 上限 4 GiB；`Maximize` 脚本也会删掉 runner 自带的 `/swapfile`，只保留 LVM swap。
 - 构建结束后脚本确认 `Image` 确实生成，并把 `HTFG_OUT_DIR` 写入 `$GITHUB_ENV` 供 `HTFG Verify` 使用。
@@ -71,27 +73,32 @@ scripts/build_kernel_direct.sh fast     # gki_defconfig + make
 - `manifest/oneplus_ace_race_v.xml` 是 vendored 的小 XML；来源/理由见 `manifest/SOURCE.md`。
 - workflow 在 `$RUNNER_TEMP` 建一个本地 git 仓库，把 XML 作为 manifest 文件，`repo init -u file://...`，不 clone 任何第三方 manifest 仓库。
 - 项目列表仍来自 `OnePlusOSS` 和 `git.codelinaro.org`；`repo sync` 需要 runner 能访问这两处。
-- `android_kernel_5.10_oneplus_mt6895` 的公开分支头不一定等于原厂提交 `38e2c85...`；见 `stock-baseline.md` §5。首启若 vendor 模块报 CRC/vermagic，先回厂 boot，再决定是否钉提交/换 manifest。
+- `android_kernel_5.10_oneplus_mt6895` 的公开分支头不一定等于原厂提交 `38e2c85...`；见 `stock-baseline.md` §5。实际构建的源码由 `manifest/pinned-sources.txt` 的 `KERNEL_SHA` 钉住（当前 `05dd76e8...`）；首启若 vendor 模块报 CRC/vermagic，先回厂 boot，再审查源码差异。
 
 ## 5. 注入顺序
 
-1. `Stage Build Inputs`：把 `htfg/`、`baseline/`、`manifest/`、`scripts/` 复制到 `$RUNNER_TEMP`（`Maximize Build Space` 会覆盖 workspace）。
-2. `Maximize Build Space`。
-3. `Configure Git`、`Validate Inputs`、`Load Manifest Info`。
-4. 3G swap、ccache、依赖、repo init/sync。
-5. `Kernel Version Handling`、`Rust Version Handling`。
-6. `Custom Kernel Suffix`（修改 `setlocalversion`）。
-7. `HTFG Inject`（复制 5 文件、挂 drivers、patch `kernel/sys.c`、fake config、kheaders）。
-8. `Custom BUILD_TIME`（`KBUILD_BUILD_*` + `mkcompile_h`）。
-9. `Disable GPUEB`（MTK 5.10；沿用旧工作流能开机的修正）、`Fix libbpf`。
-10. `Build Kernel FAST`（仅 fast）或 `Build Kernel Stock`；两者都调用 `scripts/build_kernel_direct.sh`。
-11. `HTFG Verify`（构建后、AK3 前）。
-12. `Make AnyKernel3`（`osm0sis/AnyKernel3`，只放 `Image`）。
-13. `Upload AnyKernel3`；ccache 保存。
+1. `Require Public Repository`（私有仓库直接失败；必须是第一步）。
+2. `Stage Build Inputs`：把 `htfg/`、`baseline/`、`manifest/`、`scripts/` 复制到 `$RUNNER_TEMP`（`Maximize Build Space` 会覆盖 workspace）。
+3. `Maximize Build Space`。
+4. `Configure Git`、`Validate Inputs`、`Load Manifest Info`。
+5. 8 GiB LVM swap、ccache、依赖、repo init/sync。
+6. `Pin Kernel Source`（`repo sync` 后、任何本地修改前；校验/checkout `KERNEL_SHA`）。
+7. `Prepare Build Config`（check_defconfig 修补；必须在 pin 之后）。
+8. `Kernel Version Handling`、`Rust Version Handling`。
+9. `Custom Kernel Suffix`（修改 `setlocalversion`）。
+10. `HTFG Inject`（复制 5 文件、挂 drivers、patch `kernel/sys.c`、fake config、kheaders）。
+11. `Custom BUILD_TIME`（`KBUILD_BUILD_*` + `mkcompile_h`）。
+12. `Disable GPUEB`（MTK 5.10；沿用旧工作流能开机的修正）、`Fix libbpf`。
+13. `Build Kernel FAST`（仅 fast）或 `Build Kernel Stock`；两者都调用 `scripts/build_kernel_direct.sh`。
+14. `Resolve Effective Build Mode`（fast 回退时记为 stock）。
+15. `HTFG Verify`（构建后、AK3 前；含 fake config/Image IKCFG 逐字节校验）。
+16. `Make AnyKernel3`（按 `ANYKERNEL3_SHA` 钉模板；`do.devicecheck=1`；只放 `Image` + `htfg-build-info.txt`）。
+17. `Upload AnyKernel3`；ccache 保存。
 
 ## 6. 产物
 
-- Artifact：`HTFG_Clean_oneplus_ace_race_v_9-o-g38e2c85bc7af`，内容是 AnyKernel3 文件树（`anykernel.sh`、`META-INF`、`tools`、`Image`）。
+- Artifact：`HTFG_Clean_oneplus_ace_race_v_<stock|fast>_9-o-g38e2c85bc7af`，内容是 AnyKernel3 文件树（`anykernel.sh`、`META-INF`、`tools`、`Image`、`htfg-build-info.txt`）。`build_mode` 用实际执行的模式（fast 回退到 stock 时记 stock）。
+- `htfg-build-info.txt`：`build_mode`、`kernel_source_sha`、`kernel_release`、`image_sha256`、`build_time`，用于下载后核对 provenance。
 - 没有 KSU/SUSFS/KPM/BakaSU 的 APK、模块、patch 二进制。
-- 紫罗兰“制作 GKI 镜像”只取其中的 `Image`；AK3 的 `do.devicecheck=0`、`do.modules=0`、`do.systemless=0`、`do.cleanup=1`。
+- 紫罗兰“制作 GKI 镜像”只取其中的 `Image`；AK3 的 `do.devicecheck=1`（`device.name1=OP5911`、`device.name2=PGZ110`）、`do.modules=0`、`do.systemless=0`、`do.cleanup=1`。AK3 模板按 `ANYKERNEL3_SHA` 钉版本；紫罗兰路径不会执行 `anykernel.sh`。
 - `HTFG Verify` 日志末尾打印 `Image sha256`，刷机前解包 boot 后要逐位比对。

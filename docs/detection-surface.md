@@ -8,8 +8,8 @@
 |---|---|---|---|
 | `/proc/version` / `uname` | `5.10.236-android12-9-o-g38e2c85bc7af (build-user@build-host) ... #1 SMP PREEMPT Mon Jan 12 09:35:58 UTC 2026` | 同左 | `KBUILD_BUILD_USER/HOST/VERSION/TIMESTAMP` + `setlocalversion` + `mkcompile_h` |
 | `linux_banner` 的 user@host | `build-user@build-host` | 同左 | 不再出现 `runner@...` |
-| `/proc/config.gz` | 无 KSU/SUSFS/KPM/BBG/HTFG | 同左；唯一已知差异是 thermal 符号名（见 §4.1） | fake `config_data` 只过滤 `^CONFIG_HTFG`/`^# CONFIG_HTFG` |
-| `/sys/kernel/kheaders.tar.xz` | 无 HTFG | 无 HTFG | `gen_kheaders.sh` 删除 `include/linux/htfg.h`、`include/config/HTFG*`，过滤 `autoconf.h`/`auto.conf` |
+| `/proc/config.gz` | 无 KSU/SUSFS/KPM/BBG/HTFG | **与原厂逐字节一致**（报告层把 thermal 名对齐为 REALME；真实 `.config` 仍是 OPLUS，见 §4.1） | fake `config_data` 过滤 `^CONFIG_HTFG`/`^# CONFIG_HTFG`，并把 `CONFIG_MTK_OPLUS_THERMAL=m` 报告为 `CONFIG_MTK_REALME_THERMAL=m` |
+| `/sys/kernel/kheaders.tar.xz` | 无 HTFG；REALME 热符号 | 无 HTFG；REALME 热符号（报告对齐） | `gen_kheaders.sh` 删除 `include/linux/htfg.h`、`include/config/HTFG*`，过滤 `autoconf.h`/`auto.conf`，并把 OPLUS 热符号替换为 REALME |
 | `/sys/kernel/btf/vmlinux` | 无（BTF 关闭） | 无 | 不启用 `CONFIG_DEBUG_INFO_BTF` |
 | `/proc/kallsyms` | 无 `ksu_`/`susfs`/`kpm`；有原厂符号 | 有 `htfg_kernel_entry`/`htfg_*` | 本 ROM 普通 App/shell 读不了；root/特权可读，属残余 |
 | `System.map` / `vmlinux` | 无 HTFG | 有 `htfg_kernel_entry` | 只存在于构建产物/特权读取面 |
@@ -43,8 +43,10 @@
 
 ## 4. 不可消除的残余
 
-1. **源码基线**：公开 manifest 分支头不等于原厂 `38e2c85...`；即使 banner/config 完全一致，代码级差异仍可能存在。vendor 模块 CRC/vermagic 是首要风险。
-   - 已实测到 1 个具体 config 差异：公开分支把原厂 vendor 树的 `CONFIG_MTK_REALME_THERMAL=m` 换成了 `CONFIG_MTK_OPLUS_THERMAL=m`；realme 热驱动源码未公开，无法精确还原。`htfg_verify` 只对这一精确配对放行并打印 warning，其他任何 config 差异仍判红。
+1. **源码基线**：公开分支（现由 `manifest/pinned-sources.txt` 钉在 `05dd76e8...`）不等于原厂 `38e2c85...`；即使 banner/config 完全一致，代码级差异仍可能存在。vendor 模块 CRC/vermagic 是首要风险。
+   - 已实测到 1 个具体 config 差异：公开分支把原厂 vendor 树的 `CONFIG_MTK_REALME_THERMAL=m` 换成了 `CONFIG_MTK_OPLUS_THERMAL=m`；realme 热驱动源码未公开，无法精确还原。**真实 `.config`** 保留 OPLUS，`htfg_verify` 只对这一精确配对放行并打印 warning，其他任何差异仍判红。
+   - **报告层已对齐**：fake `/proc/config.gz` 与 kheaders 把该符号报告为 stock 的 `CONFIG_MTK_REALME_THERMAL`，实测替换后 `/proc/config.gz` 与 baseline 逐字节相同（232546 字节、sha256 `7d939635...`）；`htfg_verify` 在 stock 模式下对 `config_data.gz` 和最终 Image 内嵌 IKCONFIG 都做逐字节 `cmp`。
+   - **App 可见性（本 ROM 实测 SELinux 策略）**：`untrusted_app` 对 `config_gz` 是 **neverallow**，普通 App 读不到 `/proc/config.gz`；可读的是 `adbd`/`shell`/`dumpstate`/`system_server`/`gmscore_app`。`/proc/version` 也没有 `untrusted_app` 的 allow（App 只能走 uname()/`os.version`，内容与 stock 一致）；`/proc/kallsyms`、`/proc/cmdline`（0440 root:radio）、`dmesg`、`/sys/kernel/kheaders.tar.xz` 对 shell/App 均拒绝。
 2. **Image build ID/hash**：任何改动都无法与原厂一致；普通 App 读不到，root/特权可读。
 3. **`htfg_*` 符号**：本 ROM App/shell 读不了 `/proc/kallsyms`；root/特权可读。若威胁模型包含“设备上已有 root 的检测器”，这一项无解（除非改符号名/裁 KALLSYMS，但那会引入新的 config 差异）。
 4. **bootloader/TEE/AVB/Play Integrity**：不在本项目范围。

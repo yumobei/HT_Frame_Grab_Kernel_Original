@@ -77,6 +77,6 @@ boot.img 结构（供复核）：
 
 需要明确的残余事实：
 
-- 公开分支 `android_kernel_5.10_oneplus_mt6895` 的 `oneplus/mt6895_v_15.0.0_ace_race` 头是 `05dd76e8b6e4969b7bcda3edc53a98ea441d90f5`（2026-11-05 查询）；
+- 公开分支 `android_kernel_5.10_oneplus_mt6895` 的 `oneplus/mt6895_v_15.0.0_ace_race` 头是 `05dd76e8b6e4969b7bcda3edc53a98ea441d90f5`（2026-11-05 查询），已写入 `manifest/pinned-sources.txt` 的 `KERNEL_SHA`；workflow 在 `repo sync` 后校验/checkout 该提交，漂移会明确失败；
 - 原厂 `g38e2c85bc7af` 对应的源码提交在公开 refs 中不可见/未确认；
-- 因此本项目能保证的是 **banner/config/公开面** 对齐，不能保证源码逐提交等于原厂。vendor 模块 vermagic/CRC 必须在真机首启验证；若失败，回退原厂 boot，再评估是否能把 manifest 的 kernel project 钉到 `38e2c85bc7af`（需要该提交在公开仓库可达）。
+- 因此本项目能保证的是 **banner/config/公开面** 对齐（报告层 `/proc/config.gz`、kheaders 已与 stock 逐字节/逐符号一致），不能保证源码逐提交等于原厂。vendor 模块 vermagic/CRC 必须在真机首启验证；若失败，回退原厂 boot，再审查 pin 的源码差异。

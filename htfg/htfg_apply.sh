@@ -112,8 +112,16 @@ text = io.open(path, "r", encoding="utf-8", errors="surrogateescape", newline=""
 
 # Only HTFG.  The ^CONFIG_HTFG / ^# CONFIG_HTFG prefixes also cover
 # CONFIG_HTFG_ALLOW_TOOL_UID.
+#
+# The thermal substitution is report-only: the real .config keeps
+# CONFIG_MTK_OPLUS_THERMAL=m (the public branch has no realme driver), but the
+# stock kernel's /proc/config.gz reports CONFIG_MTK_REALME_THERMAL=m.  Keep the
+# reported blob byte-identical to stock.  Use a prefix substitution without a
+# trailing anchor: this string is also embedded in a Makefile variable, where
+# an unescaped dollar sign would be eaten by make.
 EXPRS = (" -e '/^CONFIG_HTFG/d'"
-         " -e '/^# CONFIG_HTFG/d'")
+         " -e '/^# CONFIG_HTFG/d'"
+         " -e 's/^CONFIG_MTK_OPLUS_THERMAL=m/CONFIG_MTK_REALME_THERMAL=m/'")
 MARKER = "# --- HTFG fake config filter ---"
 UPSTREAM = "# --- fake_config injector ---"
 
@@ -235,9 +243,13 @@ block = (
     'rm -f "$cpio_dir"/include/config/HTFG* "$cpio_dir"/include/config/htfg*\n'
     'if [ -f "$cpio_dir/include/generated/autoconf.h" ]; then\n'
     "\tsed -i '/CONFIG_HTFG/d' \"$cpio_dir/include/generated/autoconf.h\"\n"
+    # Report alignment: the stock kernel reports the realme thermal symbol;
+    # keep kheaders consistent with the fake /proc/config.gz.
+    "\tsed -i 's/^#define CONFIG_MTK_OPLUS_THERMAL_MODULE 1$/#define CONFIG_MTK_REALME_THERMAL_MODULE 1/' \"$cpio_dir/include/generated/autoconf.h\"\n"
     "fi\n"
     'if [ -f "$cpio_dir/include/config/auto.conf" ]; then\n'
     "\tsed -i '/CONFIG_HTFG/d' \"$cpio_dir/include/config/auto.conf\"\n"
+    "\tsed -i 's/^CONFIG_MTK_OPLUS_THERMAL=m$/CONFIG_MTK_REALME_THERMAL=m/' \"$cpio_dir/include/config/auto.conf\"\n"
     "fi\n"
     "# --- HTFG kheaders filter end ---\n"
 )
@@ -271,11 +283,15 @@ if [ "${HTFG_FAKE_CONFIG:-1}" = "1" ]; then
         "$(grep -c 'HTFG fake config filter' kernel/Makefile || true)"
     chk "kernel/Makefile CONFIG_HTFG filter" 1 \
         "$(grep -c 'CONFIG_HTFG/d' kernel/Makefile || true)"
+    chk "kernel/Makefile thermal report alignment" 1 \
+        "$(grep -c 'CONFIG_MTK_OPLUS_THERMAL=m/CONFIG_MTK_REALME_THERMAL=m' kernel/Makefile || true)"
 fi
 
 if [ "${HTFG_KHEADERS_FILTER:-1}" = "1" ]; then
     chk "gen_kheaders.sh HTFG filter" 1 \
         "$(grep -c '^# --- HTFG kheaders filter ---$' kernel/gen_kheaders.sh || true)"
+    chk "gen_kheaders.sh thermal report alignment" 2 \
+        "$(grep -c 'CONFIG_MTK_OPLUS_THERMAL' kernel/gen_kheaders.sh || true)"
 fi
 
 if [ "$FAIL" != 0 ]; then
