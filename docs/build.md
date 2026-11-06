@@ -99,5 +99,7 @@ scripts/build_kernel_direct.sh fast     # gki_defconfig + make
 - Artifact：`HTFG_Clean_oneplus_ace_race_v_<stock|fast>_9-o-g38e2c85bc7af`，内容是 AnyKernel3 文件树（`anykernel.sh`、`META-INF`、`tools`、`Image`、`htfg-build-info.txt`）。`build_mode` 用实际执行的模式（fast 回退到 stock 时记 stock）。
 - `htfg-build-info.txt`：`build_mode`、`kernel_source_sha`、`kernel_release`、`image_sha256`、`build_time`，用于下载后核对 provenance。
 - 没有 KSU/SUSFS/KPM/BakaSU 的 APK、模块、patch 二进制。
+- zip 的 `tools/magiskboot`、`tools/magiskpolicy` 是 AnyKernel3 模板自带的打包工具，位于 zip 的 `tools/` 子目录，**不在 `Image` 内**；紫罗兰路径只取 `Image`，不会执行它们。
 - 紫罗兰“制作 GKI 镜像”只取其中的 `Image`；AK3 的 `do.devicecheck=1`（`device.name1=OP5911`、`device.name2=PGZ110`）、`do.modules=0`、`do.systemless=0`、`do.cleanup=1`。AK3 模板按 `ANYKERNEL3_SHA` 钉版本；紫罗兰路径不会执行 `anykernel.sh`。
 - `HTFG Verify` 日志末尾打印 `Image sha256`，刷机前解包 boot 后要逐位比对。
+- 下载产物后先跑 `python tools/check_artifact.py <zip> --boot <boot-new.img> --stock-boot 原厂镜像/boot.img`；完整刷机前/后检查清单见 `docs/构建后验证清单.md`。

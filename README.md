@@ -79,7 +79,9 @@ stock 路径的 full LTO + KASAN/CFI 对 runner 内存/时间要求高；失败�
 - `/sys/kernel/kheaders.tar.xz` 的成员名/内容不含 HTFG；
 - BTF 关闭。
 
-产物是干净 AnyKernel3（`osm0sis/AnyKernel3` 模板，按 `ANYKERNEL3_SHA` 钉版本；`do.devicecheck=1`，只接受 `OP5911`/`PGZ110`；根目录含 `Image` 与 `htfg-build-info.txt`）。artifact 名为 `HTFG_Clean_oneplus_ace_race_v_<stock|fast>_9-o-g38e2c85bc7af`。紫罗兰“制作 GKI 镜像”只取其中的 `Image`。刷机、真机 vendor 模块/App 回归和检测面记录见 `docs/verify.md`。
+产物是干净 AnyKernel3（`osm0sis/AnyKernel3` 模板，按 `ANYKERNEL3_SHA` 钉版本；`do.devicecheck=1`，只接受 `OP5911`/`PGZ110`；根目录含 `Image` 与 `htfg-build-info.txt`）。artifact 名为 `HTFG_Clean_oneplus_ace_race_v_<stock|fast>_9-o-g38e2c85bc7af`。zip 的 `tools/magiskboot`、`tools/magiskpolicy` 是 AnyKernel3 模板自带的打包工具，位于 `tools/` 子目录，不在 `Image` 内；紫罗兰“制作 GKI 镜像”只取其中的 `Image`，不会执行它们。刷机、真机 vendor 模块/App 回归和检测面记录见 `docs/verify.md`。
+
+下载产物后先跑 `python tools/check_artifact.py <zip> --boot <boot-new.img> --stock-boot 原厂镜像/boot.img`；刷机前/后的完整检查清单见 `docs/构建后验证清单.md`。
 
 ## 刷机顺序（重要）
 
