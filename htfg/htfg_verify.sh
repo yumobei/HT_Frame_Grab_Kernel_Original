@@ -438,9 +438,15 @@ echo "$STRINGS" | grep -F "$EXPECT_DATE" >/dev/null || \
 if echo "$STRINGS" | grep -F 'runner@' >/dev/null; then
     die "Image contains runner@ (GitHub Actions build host leaked)"
 fi
-# Do not use a bare "ksu" pattern: CHECKSUM contains the substring "KSU".
-# Anchor to the actual root-kernel markers instead.
-if echo "$STRINGS" | grep -iE 'kernelsu|bakasu|susfs|ksu_htfg|ksu_susfs|htfg_prctl|config_ksu|config_kpm|(^|[^a-z0-9_])ksu([^a-z0-9_]|$)|(^|[^a-z0-9_])kpm([^a-z0-9_]|$)' >/dev/null; then
+# Scan only distinctive markers in the raw Image.  The Image embeds gzip/xz
+# blobs (config_data, kheaders) whose compressed bytes are random noise; a
+# standalone three-letter "ksu"/"kpm" can appear there by chance.  Short-word
+# checks belong on the decompressed content below, not on this stream.
+# Do not use a bare "ksu" pattern either: CHECKSUM contains the substring "KSU".
+hits="$(printf '%s\n' "$STRINGS" | grep -iE 'kernelsu|bakasu|ksu_htfg|ksu_susfs|htfg_prctl|config_ksu|config_kpm|config_susfs' || true)"
+if [ -n "$hits" ]; then
+    echo "Image string hits:" >&2
+    printf '%s\n' "$hits" | sed -n '1,20p' >&2
     die "Image contains KSU/SUSFS/KPM/BakaSU strings"
 fi
 echo "OK: Image banner/compiler/date match stock; no runner@/KSU strings"
@@ -448,18 +454,46 @@ echo "OK: Image banner/compiler/date match stock; no runner@/KSU strings"
 # ---- kheaders / BTF -----------------------------------------------------
 if grep -qx 'CONFIG_IKHEADERS=y' "$CFG"; then
     if [ -n "$KH" ] && [ -f "$KH" ]; then
-        if tar -tJf "$KH" 2>/dev/null | grep -qi 'htfg'; then
+        # Decompress/list once into temp files.  Piping tar/xz into grep -q
+        # under "set -o pipefail" can return SIGPIPE (141) when grep exits
+        # early, which would silently turn a real hit into a pass.
+        kh_list="$(mktemp)"
+        if ! tar -tJf "$KH" > "$kh_list" 2>/dev/null; then
+            rm -f "$kh_list"
+            die "cannot list $KH"
+        fi
+        if grep -qi 'htfg' "$kh_list"; then
+            rm -f "$kh_list"
             die "kheaders archive still has an HTFG member name"
         fi
-        if xz -dc "$KH" 2>/dev/null | grep -a 'CONFIG_HTFG' >/dev/null; then
+        rm -f "$kh_list"
+
+        kh_tmp="$(mktemp)"
+        if ! xz -dc "$KH" > "$kh_tmp" 2>/dev/null; then
+            rm -f "$kh_tmp"
+            die "cannot decompress $KH"
+        fi
+        if grep -aq 'CONFIG_HTFG' "$kh_tmp"; then
+            rm -f "$kh_tmp"
             die "kheaders archive still contains CONFIG_HTFG"
         fi
+        # Short words are safe to check here: this is decompressed text, not
+        # the random compressed bytes that "strings" sees in the Image.
+        kh_hits="$(grep -aiE 'kernelsu|bakasu|susfs|ksu_htfg|ksu_susfs|config_ksu|config_kpm|config_susfs|ksu_|(^|[^a-z0-9_])ksu([^a-z0-9_]|$)|(^|[^a-z0-9_])kpm([^a-z0-9_]|$)' "$kh_tmp" || true)"
+        if [ -n "$kh_hits" ]; then
+            echo "kheaders content hits:" >&2
+            printf '%s\n' "$kh_hits" | sed -n '1,20p' >&2
+            rm -f "$kh_tmp"
+            die "kheaders archive contains KSU/SUSFS/KPM/BakaSU markers"
+        fi
         if [ "$BUILD_MODE" = "stock" ]; then
-            if xz -dc "$KH" 2>/dev/null | grep -a 'CONFIG_MTK_OPLUS_THERMAL' >/dev/null; then
+            if grep -aq 'CONFIG_MTK_OPLUS_THERMAL' "$kh_tmp"; then
+                rm -f "$kh_tmp"
                 die "kheaders archive still reports CONFIG_MTK_OPLUS_THERMAL"
             fi
             echo "OK: kheaders reports the stock thermal symbol set"
         fi
+        rm -f "$kh_tmp"
         echo "OK: kheaders archive has no HTFG"
     else
         warn "kheaders.tar.xz not found; cannot check header leak"

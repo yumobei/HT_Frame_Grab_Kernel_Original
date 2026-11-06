@@ -35,7 +35,7 @@
 
 ## 3. 容易误判的点
 
-- **不要用裸 `grep -i ksu`**：`CHECKSUM` 包含子串 `KSU`，会把正常 Image 判红。verify 使用 `kernelsu|bakasu|susfs|ksu_htfg|ksu_susfs|htfg_prctl|config_ksu|config_kpm` 加词边界锚定。
+- **不要用裸 `grep -i ksu`**：`CHECKSUM` 包含子串 `KSU`，会把正常 Image 判红。verify 对原始 Image 只查强标记 `kernelsu|bakasu|ksu_htfg|ksu_susfs|htfg_prctl|config_ksu|config_kpm|config_susfs`；独立的 `ksu`/`kpm` 词边界检查只放在**解压后的** kheaders 内容上——Image 里内嵌的 gzip/xz 压缩字节是随机噪声，2026-11-07 曾因压缩流随机出现 `t,r.KSu` 等片段导致误报。
 - `CONFIG_NETFILTER_XT_TARGET_CHECKSUM` 是 fake config 过滤器的“未误删”哨兵：只在 `^CONFIG_HTFG`/`^# CONFIG_HTFG` 前缀上过滤，不能把 `CHECKSUM` 一起删掉。
 - kheaders 的 `include/config/HTFG` 可能是**无 `.h` 后缀**的 Kconfig 空文件；补丁同时删除 `HTFG*`/`htfg*`，verify 检查 tar 成员名和内容，而不是只看源码 marker。
 - `htfg_kernel_entry` 在 `System.map` 中出现是**预期**的；不能以“存在 htfg 符号”判红。App/shell 读不了 kallsyms 是 ROM 策略，不是本项目引入。

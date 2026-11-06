@@ -59,15 +59,6 @@ jobs:
     name: HTFG ${{ github.event.inputs.BUILD_MODE }} ${{ github.event.inputs.FILE }}
     runs-on: ubuntu-latest
     steps:
-      # Full LTO + KASAN does not fit on the 2 vCPU / 7.7 GiB runner that
-      # GitHub Free gives private repositories.  The repository is kept
-      # public while building and switched back to private afterwards.
-      - name: Require Public Repository
-        if: ${{ github.event.repository.private }}
-        run: |
-          echo "::error::Builds run only while this repository is public. Public runners provide 4 vCPU / 16 GiB; private Free-plan runners have 2 vCPU / 7.7 GiB and cannot link the full-LTO kernel. Set the repository public, run the build, then switch it back to private."
-          exit 1
-
       - name: Checkout
         uses: actions/checkout@v7
 

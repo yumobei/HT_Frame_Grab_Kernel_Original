@@ -10,8 +10,8 @@
 - 最终 `Image` 内嵌 IKCONFIG（`IKCFG_ST`/`IKCFG_ED` 之间的 gzip）：stock 模式下与 `baseline/stock.config.gz` 逐字节相同；fast 模式至少不得含 `CONFIG_HTFG`。
 - `UTS_RELEASE` 精确等于 `5.10.236-android12-9-o-g38e2c85bc7af`，无 `+`/`-dirty`。
 - `System.map` 有 `htfg_kernel_entry`、无 `ksu_`；`drivers/htfg/htfg.o` 存在；`modules.builtin` 无 `htfg`。
-- `Image` 字符串：完整原厂 banner（`build-user@build-host`）、原厂 clang 串、`#1 SMP PREEMPT Mon Jan 12 09:35:58 UTC 2026`；无 `runner@`；无 KSU/SUSFS/KPM/BakaSU 锚定串（不使用裸 `ksu`，避免 `CHECKSUM` 假阳性）。
-- kheaders：`kheaders_data.tar.xz` 成员名不含 `htfg`（不区分大小写），内容不含 `CONFIG_HTFG`；stock 模式还要求不出现 `CONFIG_MTK_OPLUS_THERMAL`（报告名已对齐为 stock 的 REALME）。
+- `Image` 字符串：完整原厂 banner（`build-user@build-host`）、原厂 clang 串、`#1 SMP PREEMPT Mon Jan 12 09:35:58 UTC 2026`；无 `runner@`；无 `kernelsu/bakasu/ksu_htfg/ksu_susfs/htfg_prctl/config_ksu/config_kpm/config_susfs` 等强标记（不使用裸 `ksu`，避免 `CHECKSUM` 假阳性；也不在 Image 的压缩字节里查独立 `ksu`/`kpm`——压缩噪声会随机命中）。
+- kheaders：`kheaders_data.tar.xz` 成员名不含 `htfg`（不区分大小写），内容不含 `CONFIG_HTFG`；解压后再查 `kernelsu/bakasu/susfs/config_ksu/config_kpm/ksu_` 及独立 `ksu`/`kpm` 词；stock 模式还要求不出现 `CONFIG_MTK_OPLUS_THERMAL`（报告名已对齐为 stock 的 REALME）。
 - BTF：`.config` 关闭。
 
 fast 模式跳过全量 config diff，但关键项仍检查；日志会出现 fast warning。不要把 fast 的 PASS 当成 stock 等价。

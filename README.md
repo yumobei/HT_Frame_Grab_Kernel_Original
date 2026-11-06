@@ -4,7 +4,7 @@
 
 本项目与旧 `HT_Frame_Grab_Kernel_CC` 的 App/reader/协议 **ABI 完全一致**：`UI_Fetch_KM` / `NEW_AI_JiaoBen` 不需要改代码；变化只在内核侧——去掉 KSU / SUSFS / KPM / BakaSU 管理器 / SUSFS 模块 / root 用户态，只保留 HTFG 的 `READ_MEM` / `FIND_PID` / `GET_VMAS` / `TOUCH_DEV` / `TOUCH_SEND`。
 
-> 状态：**构建期间必须保持仓库为 public**（workflow 首个步骤会拒绝私有仓库并给出原因）；构建完成后可改回 private，产物/日志仍归仓库所有者。公开 runner 为 4 vCPU / 16 GiB；私有 Free 计划只有 2 vCPU / 7.7 GiB，full LTO 链接会失败（实测 63 分钟后在 `Build Kernel Stock` 被杀）。原厂 `boot.img` 被 `.gitignore` 排除，不随仓库上传。由用户自行构建、刷机、真机验证。
+> 状态：**仓库保持 public 进行云构建**。公开 runner 为 4 vCPU / 16 GiB；full LTO + KASAN 需要这个配置（私有 Free 计划只有 2 vCPU / 7.7 GiB，链接会被打挂，实测 63 分钟后在 `Build Kernel Stock` 被杀）。原厂 `boot.img` 被 `.gitignore` 排除，不随仓库上传。由用户自行构建、刷机、真机验证。
 
 ## 目标
 
